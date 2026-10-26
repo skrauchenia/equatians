@@ -69,10 +69,36 @@ object AppConfig:
         rate = c.getDouble("healing.rate"),
         cost = c.getDouble("healing.cost")
       ),
+      plants = PlantRules(
+        spawnRate = c.getDouble("plants.spawn-rate"),
+        maxPerSector = c.getInt("plants.max-per-sector"),
+        initialPerSector = c.getInt("plants.initial-per-sector"),
+        food = c.getDouble("plants.food"),
+        satietyThreshold = c.getDouble("plants.satiety-threshold"),
+        probability = c.getDouble("plants.probability")
+      ),
       scavenging = ScavengeRules(
         probability = c.getDouble("scavenging.probability"),
         satietyThreshold = c.getDouble("scavenging.satiety-threshold"),
         eatReach = c.getDouble("scavenging.eat-reach")
+      ),
+      reproduction = ReproductionRules(
+        maturityAge = c.getInt("reproduction.maturity-age"),
+        cooldown = c.getInt("reproduction.cooldown"),
+        satietyThreshold = c.getDouble("reproduction.satiety-threshold"),
+        reserveThreshold = c.getDouble("reproduction.reserve-threshold"),
+        healthThreshold = c.getDouble("reproduction.health-threshold"),
+        probability = c.getDouble("reproduction.probability"),
+        reach = c.getDouble("reproduction.reach"),
+        bodyCostPerHealth = c.getDouble("reproduction.body-cost-per-health"),
+        offspringSatiety = c.getDouble("reproduction.offspring-satiety"),
+        maxLitter = c.getInt("reproduction.max-litter")
+      ),
+      mutation = MutationRules(
+        rate = c.getDouble("mutation.rate"),
+        relativeSigma = c.getDouble("mutation.relative-sigma"),
+        absoluteSigma = c.getDouble("mutation.absolute-sigma"),
+        familyRate = c.getDouble("mutation.family-rate")
       ),
       behaviour = BehaviourRules(
         decisionInterval = c.getInt("behaviour.decision-interval"),
@@ -95,6 +121,7 @@ object AppConfig:
     GenesisConfig(
       health = range(c, "health"),
       reserve = range(c, "reserve"),
+      litterSize = range(c, "litter-size"),
       movement = MovementGenesis(
         families = families(c, "movement.families"),
         period = range(c, "movement.period"),

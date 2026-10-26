@@ -133,7 +133,12 @@ final class SimulatorApp(config: AppConfig):
     pauseButton.setText(if running then "Пауза (Space)" else "Пуск (Space)")
     val counts = world.organisms.groupMapReduce(_.family)(_ => 1)(_ + _)
     legendLabels.foreach((f, l) => l.setText(s"${f.title}: ${counts.getOrElse(f, 0)}"))
-    deathsLabel.setText(s"Погибло: ${config.population.count - world.organisms.size}   Падаль: ${world.corpses.size}")
+    val deaths = config.population.count + world.births - world.organisms.size
+    val maxGeneration = world.organisms.map(_.generation).maxOption.getOrElse(0)
+    deathsLabel.setText(
+      s"<html>Живых: ${world.organisms.size}, рождений: ${world.births}, погибло: $deaths<br>" +
+        s"Макс. поколение: $maxGeneration, растений: ${world.plants.size}, падаль: ${world.corpses.size}</html>"
+    )
     refreshInfo()
 
   /** Текущее занятие организма для заголовка карточки. */
@@ -145,6 +150,8 @@ final class SimulatorApp(config: AppConfig):
         case Behaviour.Chase(t) => s"преследует #$t"
         case Behaviour.Flee(f)  => s"отдаляется от #$f"
         case Behaviour.Scavenge(c) => s"идёт к падали #$c"
+        case Behaviour.Mate(p)     => s"идёт к партнёру #$p"
+        case Behaviour.Graze(_)    => "идёт к растению"
 
   /** Карточка выбранного организма: формулы рендерятся при смене выбора, остальное — каждый кадр. */
   private def refreshInfo(): Unit =
@@ -179,8 +186,12 @@ final class SimulatorApp(config: AppConfig):
           s"жир ${Narrative.num(o.reserve)} / ${Narrative.num(o.maxReserve(rules))}  (×${Narrative.num(e.reserveDensity)} к сытости)"
         )
         val m = o.movement
+        val origin = o.parents.fold("создан генезисом")((a, b) => s"родители #$a × #$b")
+        val ready = if o.readyToMate(world.tick, rules) then "готов к размножению" else "не готов к размножению"
         infoState.setText(
-          s"<html>сектор (${o.sector.col}, ${o.sector.row}), позиция (${Narrative.num(o.pos.x)}, ${Narrative.num(o.pos.y)})<br>" +
+          s"<html>поколение ${o.generation}, $origin<br>" +
+            s"ген помёта ${o.litterSize}, детей ${o.offspringCount}, $ready<br>" +
+            s"сектор (${o.sector.col}, ${o.sector.row}), позиция (${Narrative.num(o.pos.x)}, ${Narrative.num(o.pos.y)})<br>" +
             s"возраст t = ${o.age}, x = ${Narrative.num(m.argument(o.age))}, шаг ${Narrative.num(m.speed)}<br>" +
             s"радиус ${Narrative.num(o.radius(rules))}, урон ×${String.format(Locale.ROOT, "%.2f", o.sizeFactor(rules))} за размер<br>" +
             s"расход ${String.format(Locale.ROOT, "%.3f", Simulation.metabolicCost(o, rules))} / тик, " +

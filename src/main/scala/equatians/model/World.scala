@@ -21,16 +21,26 @@ final case class WorldConfig(cols: Int, rows: Int, sectorSize: Double):
   *
   * @param seed      сид мира; вместе с тиком и id организма даёт все случайные решения
   * @param graveyard последние погибшие организмы — чтобы можно было посмотреть их журнал
-  * @param corpses   трупы с недоеденным жиром
+  * @param genesis   диапазоны генов генезиса — нужны мутации, меняющей семейство функции
+  * @param corpses   трупы с недоеденной едой
+  * @param plants    растения
+  * @param nextPlantId id для следующего растения
+  * @param nextId    id для следующего родившегося организма
+  * @param births    сколько организмов родилось с начала мира
   */
 final case class World(
     config: WorldConfig,
     rules: Rules,
+    genesis: GenesisConfig,
     organisms: Vector[Organism],
     seed: Long,
     tick: Long = 0,
     graveyard: Vector[Organism] = Vector.empty,
-    corpses: Vector[Corpse] = Vector.empty
+    corpses: Vector[Corpse] = Vector.empty,
+    plants: Vector[Plant] = Vector.empty,
+    nextPlantId: Int = 0,
+    nextId: Int = 0,
+    births: Long = 0
 ):
   /** Организмы, находящиеся в секторе `sector`. */
   def organismsIn(sector: SectorId): Vector[Organism] = organisms.filter(_.sector == sector)

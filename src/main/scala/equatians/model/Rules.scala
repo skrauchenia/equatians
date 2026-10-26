@@ -21,6 +21,25 @@ final case class EnergyRules(
 /** Восстановление здоровья: `rate` единиц за тик по цене `cost` сытости за единицу. */
 final case class HealingRules(rate: Double, cost: Double)
 
+/** Растения — возобновляемая еда.
+  *
+  * @param spawnRate        вероятность за тик, что в секторе вырастет растение
+  * @param maxPerSector     предел числа растений в секторе
+  * @param initialPerSector сколько растений в секторе при генезисе
+  * @param food             еда в одном растении, в единицах жира
+  * @param satietyThreshold растения интересны, пока доля сытости ниже порога
+  * @param probability      вероятность за тик пойти к замеченному растению
+  */
+final case class PlantRules(
+    spawnRate: Double,
+    maxPerSector: Int,
+    initialPerSector: Int,
+    food: Double,
+    satietyThreshold: Double,
+    probability: Double
+):
+  require(spawnRate >= 0 && spawnRate <= 1, "plants.spawn-rate должен быть в [0, 1]")
+
 /** Поедание падали.
   *
   * @param probability      вероятность за тик пойти к замеченной падали
@@ -28,6 +47,39 @@ final case class HealingRules(rate: Double, cost: Double)
   * @param eatReach         расстояние от края тела, с которого можно есть
   */
 final case class ScavengeRules(probability: Double, satietyThreshold: Double, eatReach: Double)
+
+/** Размножение.
+  *
+  * @param maturityAge       возраст, с которого можно размножаться
+  * @param cooldown          перерыв между размножениями
+  * @param probability       вероятность пойти к готовому партнёру при очередном решении
+  * @param reach             расстояние между краями тел, на котором происходит спаривание
+  * @param bodyCostPerHealth стоимость тела потомка в сытости на единицу его макс. здоровья
+  * @param offspringSatiety  сытость новорождённого как доля от максимума — тоже оплачивается родителями
+  * @param maxLitter         верхняя граница гена размера помёта
+  */
+final case class ReproductionRules(
+    maturityAge: Int,
+    cooldown: Int,
+    satietyThreshold: Double,
+    reserveThreshold: Double,
+    healthThreshold: Double,
+    probability: Double,
+    reach: Double,
+    bodyCostPerHealth: Double,
+    offspringSatiety: Double,
+    maxLitter: Int
+):
+  require(maxLitter >= 1, "max-litter должен быть ≥ 1")
+
+/** Мутации при рождении.
+  *
+  * @param rate          вероятность мутации каждого числового гена
+  * @param relativeSigma доля |гена| в σ нормального шума
+  * @param absoluteSigma постоянная часть σ, чтобы мутировали и нулевые гены
+  * @param familyRate    вероятность смены семейства функции (для движения — новый вид)
+  */
+final case class MutationRules(rate: Double, relativeSigma: Double, absoluteSigma: Double, familyRate: Double)
 
 /** Параметры выбора поведения при встрече с чужим организмом. */
 final case class BehaviourRules(
@@ -64,7 +116,16 @@ final case class Rules(
     meatPerHealth: Double,
     energy: EnergyRules,
     healing: HealingRules,
+    plants: PlantRules,
     scavenging: ScavengeRules,
+    reproduction: ReproductionRules,
+    mutation: MutationRules,
     behaviour: BehaviourRules,
     attack: AttackRules
-)
+):
+  require(
+    reproduction.bodyCostPerHealth >= meatPerHealth * energy.reserveDensity,
+    s"reproduction.body-cost-per-health (${reproduction.bodyCostPerHealth}) должен быть не меньше " +
+      s"meat-per-health · reserve-density (${meatPerHealth * energy.reserveDensity}): " +
+      "иначе выгодно рожать детей и есть их падаль"
+  )

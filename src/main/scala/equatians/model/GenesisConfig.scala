@@ -1,6 +1,4 @@
-package equatians.sim
-
-import equatians.model.Family
+package equatians.model
 
 import scala.util.Random
 
@@ -50,10 +48,12 @@ final case class AttackGenesis(families: Vector[Family], functions: FunctionRang
   *
   * @param health  максимальное здоровье
   * @param reserve начальный жир как доля от его максимума
+  * @param litterSize ген размера помёта (округляется до целого)
   */
 final case class GenesisConfig(
     health: GeneRange,
     reserve: GeneRange,
+    litterSize: GeneRange,
     movement: MovementGenesis,
     attack: AttackGenesis
 )

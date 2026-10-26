@@ -60,6 +60,32 @@ object Narrative:
     s"съел падаль #${c.id}: ${num(meal.eaten)} еды → +${num(meal.toSatiety)} сытости, +${num(meal.toReserve)} жира" +
       (if left > Simulation.CorpseMinReserve then s"; осталось ${num(left)}" else "; ничего не осталось")
 
+  def seekMate(partner: Organism, dist: Double): String = s"ищет пару: идёт к #${partner.id} в ${num(dist)}"
+  def mateLost(partner: Int): String = s"потерял партнёра #$partner из виду, обычное движение"
+  def mateGaveUp(partner: Int): String = s"больше не готов к размножению, оставил #$partner"
+
+  def mated(partner: Int, children: Vector[Int], wanted: Int, share: Double): String =
+    if children.isEmpty then s"спарился с #$partner, но сил не хватило даже на одного потомка"
+    else
+      s"спарился с #$partner: потомство ${children.map(id => s"#$id").mkString(", ")}" +
+        (if children.size < wanted then s" (хотели $wanted, хватило сил на ${children.size})" else "") +
+        s"; потрачено ${num(share)} сытости"
+
+  def bornChild(k: Genetics.Offspring, a: Organism, b: Organism, rules: Rules): String =
+    val o = k.organism
+    s"родился от #${a.id} × #${b.id}, поколение ${o.generation}: макс. здоровье ${num(o.maxHealth)}, " +
+      s"${vitals(o, rules)}, помёт ${o.litterSize}; " +
+      (if k.mutations.isEmpty then "без мутаций" else s"мутации: ${k.mutations.mkString("; ")}") +
+      (if k.newSpecies then s" — НОВЫЙ ВИД (${o.family.title})" else "")
+
+  def spotPlant(p: Plant, dist: Double, rules: Rules, o: Organism): String =
+    s"заметил растение (еды ${num(p.food)}) в ${num(dist)} — идёт есть; ${vitals(o, rules)}"
+
+  def plantGone(p: Int): String = "растение кто-то съел, обычное движение"
+
+  def atePlant(p: Plant, meal: Meal): String =
+    s"съел растение: ${num(meal.eaten)} еды → +${num(meal.toSatiety)} сытости, +${num(meal.toReserve)} жира"
+
   def fullyHealed: String = "здоровье полностью восстановлено"
 
   def killedBy(killer: Int): String = s"погиб от удара #$killer"

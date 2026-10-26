@@ -10,6 +10,17 @@ enum Behaviour:
   case Flee(from: Int)
   /** Идёт есть падаль `corpse`. */
   case Scavenge(corpse: Int)
+  /** Идёт к партнёру своего вида, чтобы размножиться. */
+  case Mate(partner: Int)
+  /** Идёт есть растение `plant`. */
+  case Graze(plant: Int)
+
+/** Неподвижный источник еды: падаль или растение. Еда — в единицах жира. */
+sealed trait FoodSource:
+  def id: Int
+  def sector: SectorId
+  def pos: Vec2
+  def food: Double
 
 /** Труп, который может доесть любой организм.
   *
@@ -17,6 +28,10 @@ enum Behaviour:
   * @param food сколько еды осталось, в единицах жира (мясо тела плюс несъеденный жир)
   */
 final case class Corpse(id: Int, species: Family, sector: SectorId, pos: Vec2, food: Double, diedAt: Long)
+    extends FoodSource
+
+/** Растение — возобновляемая еда; появляется в секторах само. Id растений — своя нумерация. */
+final case class Plant(id: Int, sector: SectorId, pos: Vec2, food: Double) extends FoodSource
 
 /** Запись в журнале организма. */
 final case class LogEntry(tick: Long, text: String)
@@ -34,6 +49,11 @@ final case class LogEntry(tick: Long, text: String)
   * @param reserve   жир — тратится, когда сытость на нуле; одна единица = `reserveDensity` сытости.
   *                  Ёмкость жира пропорциональна `maxHealth`
   * @param lastStep  фактический шаг на прошлом тике — для отрисовки курса и расчёта расхода
+  * @param litterSize ген: желаемое число детей за одно размножение
+  * @param generation поколение: 0 у созданных генезисом, у потомка — максимум родителей плюс один
+  * @param parents   id родителей, если организм родился, а не создан генезисом
+  * @param lastReproductionTick тик последнего размножения — для перерыва между ними
+  * @param offspringCount сколько всего детей родил организм
   */
 final case class Organism(
     id: Int,
@@ -51,7 +71,12 @@ final case class Organism(
     behaviour: Behaviour = Behaviour.Cruise,
     lastAttackTick: Long = Long.MinValue / 2,
     lastStep: Vec2 = Vec2.Zero,
-    log: Vector[LogEntry] = Vector.empty
+    log: Vector[LogEntry] = Vector.empty,
+    litterSize: Int = 1,
+    generation: Int = 0,
+    parents: Option[(Int, Int)] = None,
+    lastReproductionTick: Long = Long.MinValue / 2,
+    offspringCount: Int = 0
 ):
   /** Семейство функции органа движения. */
   def family: Family = movement.f.family
@@ -89,6 +114,13 @@ final case class Organism(
 
   /** Вся доступная энергия в единицах сытости: сытость плюс жир по курсу. */
   def energy(rules: Rules): Double = satiety + reserve * rules.energy.reserveDensity
+
+  /** Готов ли к размножению на тике `now`: взрослый, перерыв прошёл, сытость, жир и здоровье выше порогов. */
+  def readyToMate(now: Long, rules: Rules): Boolean =
+    val r = rules.reproduction
+    alive && age >= r.maturityAge && now - lastReproductionTick >= r.cooldown &&
+      satietyFraction(rules) >= r.satietyThreshold && reserveFraction(rules) >= r.reserveThreshold &&
+      health / maxHealth >= r.healthThreshold
 
   /** Расстояние до другого организма (имеет смысл только внутри одного сектора). */
   def distanceTo(other: Organism): Double = (other.pos - pos).length

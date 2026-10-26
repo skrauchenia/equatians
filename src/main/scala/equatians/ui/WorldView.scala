@@ -20,6 +20,8 @@ object Palette:
   val Dead: Color = Color(150, 150, 160)
   val Carrion: Color = Color(170, 140, 110)
   val Scavenge: Color = Color(200, 170, 120)
+  val Mate: Color = Color(255, 140, 200)
+  val Plant: Color = Color(90, 190, 90)
 
   val byFamily: Map[Family, Color] = Map(
     Family.Linear      -> Color(86, 180, 233),
@@ -122,6 +124,7 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
     val l = currentLayout
     world.config.sectors.foreach(drawSector(g, l, _))
+    world.plants.foreach(drawPlant(g, l, _))
     world.corpses.foreach(drawCarrion(g, l, _))
     if showTrails then world.organisms.foreach(drawTrail(g, l, _))
     world.organisms.foreach(drawIntent(g, l, _))
@@ -192,6 +195,13 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
         lineTo(f, Color(c.getRed, c.getGreen, c.getBlue, 140), dash)
       case Behaviour.Scavenge(c) =>
         world.corpses.find(_.id == c).foreach(corpse => lineToPoint(corpse.sector, corpse.pos, Palette.Scavenge, BasicStroke(1.5f)))
+      case Behaviour.Graze(p) =>
+        world.plants.find(_.id == p).foreach { plant =>
+          val c = Palette.Plant
+          lineToPoint(plant.sector, plant.pos, Color(c.getRed, c.getGreen, c.getBlue, 150), BasicStroke(1f))
+        }
+      case Behaviour.Mate(p) =>
+        lineTo(p, Palette.Mate, BasicStroke(1.5f))
       case Behaviour.Cruise => ()
 
   /** Организм — круг цвета вида (размер по здоровью) и чёрточка по курсу; выбранный обведён. */
@@ -206,6 +216,19 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     if selectedId.contains(o.id) then
       g.setColor(Color.WHITE)
       g.draw(Ellipse2D.Double(x - r - 4, y - r - 4, 2 * r + 8, 2 * r + 8))
+
+  /** Растение — маленький зелёный ромб; размер — по оставшейся еде. */
+  private def drawPlant(g: Graphics2D, l: Layout, p: Plant): Unit =
+    val (x, y) = l.toScreen(p.sector, p.pos)
+    val r = (world.rules.sizePerSqrtHealth * math.sqrt(p.food) * l.scale).max(1.5)
+    val diamond = Path2D.Double()
+    diamond.moveTo(x, y - r)
+    diamond.lineTo(x + r, y)
+    diamond.lineTo(x, y + r)
+    diamond.lineTo(x - r, y)
+    diamond.closePath()
+    g.setColor(Palette.Plant)
+    g.fill(diamond)
 
   /** Падаль — бурое кольцо с заливкой цвета вида; площадь пропорциональна оставшейся еде. */
   private def drawCarrion(g: Graphics2D, l: Layout, c: Corpse): Unit =

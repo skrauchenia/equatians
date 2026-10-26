@@ -26,11 +26,21 @@ object Genesis:
         health = health,
         maxHealth = health,
         satiety = rules.energy.maxSatiety,
-        reserve = reserveShare * rules.energy.reservePerHealth * health
+        reserve = reserveShare * rules.energy.reservePerHealth * health,
+        litterSize = genesis.litterSize.sample(rnd).round.toInt.max(1).min(rules.reproduction.maxLitter)
       )
       o.logged(0, Narrative.born(o, rules), rules.logSize)
     }
-    World(world, rules, organisms, seed)
+    val plants = for
+      sector <- world.sectors.toVector
+      _ <- 0 until rules.plants.initialPerSector
+    yield (sector, Vec2(rnd.nextDouble() * world.sectorSize, rnd.nextDouble() * world.sectorSize))
+    World(
+      world, rules, genesis, organisms, seed,
+      plants = plants.zipWithIndex.map { case ((s, p), i) => Plant(i, s, p, rules.plants.food) },
+      nextPlantId = plants.size,
+      nextId = count
+    )
 
   /** Случайный орган движения: семейство из `genesis.families`, гены из настроенных диапазонов. */
   def randomMovement(genesis: MovementGenesis, rnd: Random): MovementOrgan =

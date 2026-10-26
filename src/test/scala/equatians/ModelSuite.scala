@@ -2,12 +2,15 @@ package equatians
 
 import equatians.model.*
 import equatians.model.MathFunction.*
-import equatians.sim.{Genesis, Simulation}
+import equatians.sim.{Genesis, Genetics, Simulation}
+
+import scala.util.Random
 
 class ModelSuite extends munit.FunSuite:
 
   private val cfg = AppConfig.load()
-  private val rules = cfg.rules
+  /** Правила без роста растений, чтобы сценарии не зависели от случайной еды. */
+  private val rules = cfg.rules.copy(plants = cfg.rules.plants.copy(spawnRate = 0))
 
   /** Организм в секторе (0, 0) с прямолинейным движением на восток и сильным ударом в упор. */
   private def organism(
@@ -19,12 +22,25 @@ class ModelSuite extends munit.FunSuite:
       satiety: Double = 100,
       reserve: Double = 0,
       speed: Double = 1.0,
-      attack: AttackOrgan = AttackOrgan(Polynomial(Vector(10.0, -12.0)), 15, 0.05)
+      attack: AttackOrgan = AttackOrgan(Polynomial(Vector(10.0, -12.0)), 15, 0.05),
+      age: Long = 0,
+      litter: Int = 1
   ): Organism =
     val max = if maxHealth < 0 then health else maxHealth
-    Organism(id, MovementOrgan(f, 10, 1.0, speed), attack, SectorId(0, 0), pos, health, max, satiety, reserve)
+    Organism(id, MovementOrgan(f, 10, 1.0, speed), attack, SectorId(0, 0), pos, health, max, satiety, reserve,
+      age = age, litterSize = litter)
 
-  private def world(os: Organism*): World = World(WorldConfig(1, 1, 100), rules, os.toVector, seed = 1)
+  private def world(os: Organism*): World =
+    World(WorldConfig(1, 1, 100), rules, cfg.genesis, os.toVector, seed = 1, nextId = 100)
+
+  private val noMutation = rules.copy(mutation = rules.mutation.copy(rate = 0, familyRate = 0))
+
+  /** Двое взрослых сытых организмов одного вида рядом друг с другом. */
+  private def couple(satiety: Double = 100, reserve: Double = 40, litter: Int = 1, age: Long = 1000) =
+    Seq(
+      organism(0, satiety = satiety, reserve = reserve, litter = litter, age = age),
+      organism(1, pos = Vec2(52, 50), satiety = satiety, reserve = reserve, litter = litter, age = age, speed = 0.5)
+    )
 
   private val sine = Sinusoidal(1, 1, 0, 0)
 
@@ -165,7 +181,8 @@ class ModelSuite extends munit.FunSuite:
     val start = Genesis.randomWorld(WorldConfig(3, 2, 100), rules, cfg.genesis, count = 100, seed = 7)
     val end = run(start, 3000)
     assertEquals(end.tick, 3000L)
-    assertEquals(end.organisms.size + end.graveyard.size, 100)
+    assertEquals(end.organisms.map(_.id).distinct.size, end.organisms.size)
+    assert(end.organisms.size <= 100 + end.births)
     assert(end.corpses.forall(_.food > 0))
     end.organisms.foreach { o =>
       assert(o.pos.x >= 0 && o.pos.x <= 100 && o.pos.y >= 0 && o.pos.y <= 100, o.id)
@@ -173,6 +190,70 @@ class ModelSuite extends munit.FunSuite:
       assert(o.satiety <= rules.energy.maxSatiety + 1e-9 && o.reserve <= o.maxReserve(rules) + 1e-9, o.id)
       assert(o.health <= o.maxHealth + 1e-9, o.id)
     }
+
+  test("crossover without mutation takes every gene from one of the parents"):
+    val a = organism(0, f = Polynomial(Vector(1.0, 2.0, 3.0)), health = 30, litter = 1, speed = 0.5)
+    val b = organism(1, f = Polynomial(Vector(-1.0, -2.0, -3.0)), health = 50, litter = 4, speed = 1.5)
+    val w = world(a, b).copy(rules = noMutation)
+    for seed <- 0 until 20 do
+      val k = Genetics.offspring(100, a, b, Vec2(50, 50), 0, w, Random(seed))
+      val child = k.organism
+      assert(k.mutations.isEmpty)
+      val Polynomial(cs) = child.movement.f: @unchecked
+      cs.zipWithIndex.foreach((c, i) => assert(c == (i + 1) || c == -(i + 1), cs))
+      assert(Set(30.0, 50.0)(child.maxHealth) && Set(1, 4)(child.litterSize) && Set(0.5, 1.5)(child.movement.speed))
+      assertEquals(child.generation, 1)
+      assertEquals(child.parents, Some((0, 1)))
+      assertEqualsDouble(child.health, child.maxHealth, 1e-9)
+
+  test("family macro-mutation creates a new species"):
+    val (a, b) = (organism(0), organism(1))
+    val always = rules.copy(mutation = rules.mutation.copy(familyRate = 1))
+    val k = Genetics.offspring(100, a, b, Vec2(50, 50), 0, world(a, b).copy(rules = always), Random(1))
+    assert(k.newSpecies)
+    assertNotEquals(k.organism.species, a.species)
+    assert(k.mutations.exists(_.contains("функция движения")))
+
+  test("ready couple of the same species mates and parents pay for the offspring"):
+    val end = run(world(couple()*), 40)
+    assertEquals(end.births, 1L)
+    val child = end.organisms.find(_.id == 100).get
+    assertEquals(child.parents, Some((0, 1)))
+    assertEquals(child.generation, 1)
+    assert(child.log.head.text.startsWith("родился от #0 × #1"))
+    val parents = end.organisms.filter(_.id < 2)
+    assert(parents.forall(p => p.offspringCount == 1 && p.log.exists(_.text.contains("спарился"))))
+    assert(parents.forall(_.energy(rules) < 100 + 40 * rules.energy.reserveDensity - 50))
+
+  test("immature organisms do not mate"):
+    assertEquals(run(world(couple(age = 0)*), 200).births, 0L)
+
+  test("litter is limited by what both parents can afford"):
+    // Энергия каждого ≈ 62 + 8·4 = 94, ребёнок стоит 3·40 + 50 = 170, т.е. 85 на родителя: хватает на одного из пяти.
+    val end = run(world(couple(satiety = 62, reserve = 8, litter = 5)*).copy(rules = noMutation), 40)
+    assertEquals(end.births, 1L)
+    assert(end.organisms.find(_.id == 0).get.log.exists(_.text.contains("хотели 5, хватило сил на 1")))
+
+  test("config refuses bodies cheaper than the meat they leave"):
+    intercept[IllegalArgumentException](
+      rules.copy(reproduction = rules.reproduction.copy(bodyCostPerHealth = 1.0))
+    )
+
+  test("plants sprout in every sector over time, up to the limit"):
+    val withPlants = cfg.rules.copy(plants = cfg.rules.plants.copy(spawnRate = 1, maxPerSector = 5))
+    val w = World(WorldConfig(2, 1, 100), withPlants, cfg.genesis, Vector.empty, seed = 1)
+    val end = run(w, 50)
+    assertEquals(end.plants.groupMapReduce(_.sector)(_ => 1)(_ + _), Map(SectorId(0, 0) -> 5, SectorId(1, 0) -> 5))
+    assertEquals(end.plants.map(_.id).distinct.size, 10)
+
+  test("hungry organism walks to a plant and eats it"):
+    val hungry = organism(0, satiety = 30)
+    val plant = Plant(0, SectorId(0, 0), Vec2(56, 50), rules.plants.food)
+    val end = run(world(hungry).copy(plants = Vector(plant), nextPlantId = 1), 40)
+    val o = end.organisms.head
+    assert(o.log.exists(_.text.startsWith("съел растение")), o.log)
+    assert(end.plants.isEmpty)
+    assert(o.satiety > 30)
 
   test("default config file loads"):
     assertEquals(cfg.genesis.movement.families.toSet, Family.values.toSet)
