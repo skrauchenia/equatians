@@ -2,8 +2,9 @@ package equatians
 
 import equatians.model.*
 import equatians.model.MathFunction.*
-import equatians.sim.{Forage, Genesis, Genetics, Simulation}
+import equatians.sim.{Forage, Genealogy, Genesis, Genetics, Simulation}
 import equatians.stats.*
+import equatians.ui.Navigation
 
 import scala.util.Random
 
@@ -350,6 +351,73 @@ class ModelSuite extends munit.FunSuite:
     assertEquals(samples.head.tick, 0L)
     assertEquals(samples.map(_.tick), samples.map(_.tick).sorted)
     assertEquals(samples.last.eventsOf(Scope.Whole).births, w.events.values.map(_.births).sum)
+
+  test("offspring records which parent each gene came from"):
+    val a = organism(0, f = Polynomial(Vector(1.0, 2.0)), health = 30)
+    val b = organism(1, f = Polynomial(Vector(-1.0, -2.0)), health = 50)
+    val k = Genetics.offspring(100, a, b, Vec2(50, 50), 0, world(a, b).copy(rules = noMutation), Random(5))
+    val genes = Genes.of(k.organism)
+    assertEquals(k.origin.keySet, genes.map(_._1).toSet)
+    assert(k.changes.isEmpty)
+    def parentValue(key: String, id: Int) = Genes.of(if id == 0 then a else b).toMap.get(key)
+    genes.foreach((key, v) => assertEquals(parentValue(key, k.origin(key)), Some(v), key))
+
+  test("mutations are recorded as before -> after of the final gene value"):
+    val (a, b) = (organism(0), organism(1))
+    val always = rules.copy(mutation = rules.mutation.copy(rate = 1, familyRate = 0))
+    val k = Genetics.offspring(100, a, b, Vec2(50, 50), 0, world(a, b).copy(rules = always), Random(2))
+    assert(k.changes.nonEmpty)
+    val genes = Genes.of(k.organism).toMap
+    k.changes.foreach((key, c) => assertEquals(genes(key), c.after, key))
+
+  test("awakening records the family change and the genes it created"):
+    val p = forageAt(0, Vec2(50, 50), heading = 1.2)
+    val awakening = rules.copy(forage = rules.forage.copy(awakeningRate = 1))
+    val k = Genetics.bud(100, p, Vec2(51, 50), 0, world(p).copy(rules = awakening), Random(1))
+    assert(k.changes.contains(Genes.MovementFamily))
+    assert(k.origin.values.forall(_ == 0))
+    if k.organism.movement.f.isInstanceOf[Polynomial] then assertEquals(k.changes.get("θ: a1").map(_.before), Some(None))
+
+  test("lineage follows a gene back through the parent it came from"):
+    val (a, b) = couple() match { case Seq(x, y) => (x, y) }
+    val start = world(a, b).copy(lineage = Map(0 -> Genealogy.record(a, 0), 1 -> Genealogy.record(b, 0)))
+    val end = run(start, 40)
+    val child = end.organisms.find(_.id == 100).get
+    val record = end.lineage(100)
+    assertEquals(record.parents, Vector(0, 1))
+    val steps = Genealogy.trace(end.lineage, 100, Genes.Speed)
+    assertEquals(steps.map(_.record.id).head, 100)
+    assertEquals(steps.size, 2)
+    assertEquals(steps.last.end, Some("создан миром"))
+    assertEquals(steps.head.value, Some(GeneValue.Num(child.movement.speed)))
+
+  test("pruning keeps the living and their ancestors, forgets dead ends"):
+    def rec(id: Int, parents: Int*) = Genealogy.record(organism(id).copy(parents = parents.toVector), 0)
+    val lineage = Map(1 -> rec(1), 2 -> rec(2), 3 -> rec(3, 1, 2), 4 -> rec(4, 1, 2), 5 -> rec(5, 3))
+    assertEquals(Genealogy.prune(lineage, Seq(5)).keySet, Set(5, 3, 1, 2))
+    assertEquals(Genealogy.layers(lineage, 5, 5).map(_.map(_.id).toSet), Vector(Set(5), Set(3), Set(1, 2)))
+
+  test("forage chains collapse to the nearest forage ancestor"):
+    def rec(id: Int, forage: Boolean, parents: Int*) =
+      val o = if forage then forageAt(id, Vec2(1, 1)) else organism(id)
+      Genealogy.record(o.copy(parents = parents.toVector), 0)
+    // #0 корм (создан миром) ← #1 ← #2 ← #3 (корм) ← #4 пробудился ← #5 потомок #4 и #6
+    val lineage = Map(0 -> rec(0, true), 1 -> rec(1, true, 0), 2 -> rec(2, true, 1), 3 -> rec(3, true, 2),
+      4 -> rec(4, false, 3), 6 -> rec(6, false), 5 -> rec(5, false, 4, 6))
+    assertEquals(Genealogy.forageAncestors(lineage, 3).map(_.id), Vector(2, 1, 0))
+    assertEquals(Genealogy.layers(lineage, 5, 10).map(_.map(_.id).toSet), Vector(Set(5), Set(4, 6), Set(3)))
+
+  test("navigation goes back, forward and drops the forward branch on a new jump"):
+    val nav = Navigation[Int]()
+    nav.reset(1)
+    nav.go(2); nav.go(3)
+    assertEquals(nav.step(-1), Some(2))
+    assertEquals(nav.step(-1), Some(1))
+    assertEquals(nav.step(-1), None)
+    assertEquals(nav.step(1), Some(2))
+    nav.go(7)
+    assertEquals(nav.trail, (Vector(1, 2, 7), 2))
+    assert(!nav.canForward && nav.canBack)
 
   test("default config file loads"):
     assertEquals(cfg.genesis.movement.families.toSet, Family.values.toSet - Family.Constant)

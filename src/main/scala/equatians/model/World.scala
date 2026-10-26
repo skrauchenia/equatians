@@ -60,6 +60,7 @@ object SectorEvents:
   * @param buds      сколько корма отпочковалось (включая пробудившихся)
   * @param awakenings сколько клонов корма пробудилось в активные организмы
   * @param events    накопительные счётчики событий по секторам — для статистики
+  * @param lineage   родословная: записи о живых, недавно погибших и всех их предках (см. `sim.Genealogy`)
   */
 final case class World(
     config: WorldConfig,
@@ -75,7 +76,8 @@ final case class World(
     forageSpawned: Long = 0,
     buds: Long = 0,
     awakenings: Long = 0,
-    events: Map[SectorId, SectorEvents] = Map.empty
+    events: Map[SectorId, SectorEvents] = Map.empty,
+    lineage: Map[Int, LineageRecord] = Map.empty
 ):
   /** Организмы, находящиеся в секторе `sector`. */
   def organismsIn(sector: SectorId): Vector[Organism] = organisms.filter(_.sector == sector)

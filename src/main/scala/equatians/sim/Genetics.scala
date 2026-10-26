@@ -24,45 +24,47 @@ import scala.util.Random
   */
 object Genetics:
 
-  /** Потомок, человекочитаемый список его мутаций и признак того, что он другого вида, чем родитель. */
-  final case class Offspring(organism: Organism, mutations: Vector[String], newSpecies: Boolean)
+  /** Потомок и всё о его наследовании.
+    *
+    * @param mutations  описания мутаций для журнала
+    * @param newSpecies другого ли он вида, чем (первый) родитель
+    * @param origin     ген → id родителя, от которого ген унаследован
+    * @param changes    ген → как он изменился относительно унаследованного значения
+    */
+  final case class Offspring(
+      organism: Organism,
+      mutations: Vector[String],
+      newSpecies: Boolean,
+      origin: Map[String, Int],
+      changes: Map[String, GeneChange]
+  )
 
   /** Создаёт потомка двух родителей в точке `pos` сектора родителя `a`.
     * Рождается с полным здоровьем, сытостью `offspring-satiety` и без жира.
     */
   def offspring(id: Int, a: Organism, b: Organism, pos: Vec2, now: Long, world: World, rnd: Random): Offspring =
     val rules = world.rules
-    val mut = Mutator(rnd, rules.mutation)
-    def pick[A](x: A, y: A): A = if rnd.nextBoolean() then x else y
-
-    val movementFn = mutateMovement(mut, crossFunction(a.movement.f, b.movement.f, rnd), world, rules.mutation.familyRate)
-    val attackFn = mutateAttack(mut, crossFunction(a.attack.g, b.attack.g, rnd), world)
-
-    val movement = MovementOrgan(
-      f = movementFn,
-      period = mut.gene("период", pick(a.movement.period, b.movement.period).toDouble).round.toInt.max(1),
-      span = mut.gene("span", pick(a.movement.span, b.movement.span)).max(0.1),
-      speed = mut.gene("скорость", pick(a.movement.speed, b.movement.speed)).max(0.05)
+    val inh = Inheritor(rnd, a.id, b.id)
+    val crossed = Genotype(
+      movement = MovementOrgan(
+        f = inh.function("θ", Genes.MovementFamily, a.movement.f, b.movement.f),
+        period = inh.pick(Genes.Period, a.movement.period, b.movement.period),
+        span = inh.pick(Genes.Span, a.movement.span, b.movement.span),
+        speed = inh.pick(Genes.Speed, a.movement.speed, b.movement.speed)
+      ),
+      attack = inh.function("D", Genes.AttackFamily, a.attack.g, b.attack.g),
+      maxHealth = inh.pick(Genes.MaxHealth, a.maxHealth, b.maxHealth),
+      litterSize = inh.pick(Genes.Litter, a.litterSize, b.litterSize)
     )
-    val maxHealth = mut.gene("макс. здоровье", pick(a.maxHealth, b.maxHealth)).max(5)
-    val litter = mut.step("помёт", pick(a.litterSize, b.litterSize), 1, rules.reproduction.maxLitter)
-
-    val child = Organism(
-      id = id,
-      movement = movement,
-      attack = AttackOrgan(attackFn, rules.attack.maxReach, rules.attack.costFactor),
-      sector = a.sector,
-      pos = pos,
-      health = maxHealth,
-      maxHealth = maxHealth,
+    val mut = Mutator(rnd, rules.mutation)
+    val g = mutate(crossed, mut, world, rules.mutation.familyRate, minHealth = 5)
+    val child = body(id, g, a.sector, pos, now, world.rules).copy(
       satiety = rules.reproduction.offspringSatiety * rules.energy.maxSatiety,
       reserve = 0,
-      litterSize = litter,
       generation = math.max(a.generation, b.generation) + 1,
-      parents = Vector(a.id, b.id),
-      lastReproductionTick = now
+      parents = Vector(a.id, b.id)
     )
-    Offspring(child, mut.notes, newSpecies = child.species != a.species)
+    Offspring(child, mut.notes, child.species != a.species, completeOrigin(inh.origin, g), diff(crossed, g))
 
   /** Отпочковывает клона корма `p` в точке `pos`: гены родителя с мутациями, без скрещивания.
     *
@@ -72,61 +74,96 @@ object Genetics:
     */
   def bud(id: Int, p: Organism, pos: Vec2, now: Long, world: World, rnd: Random): Offspring =
     val rules = world.rules
+    val inherited = Genotype.of(p)
     val mut = Mutator(rnd, rules.mutation)
-    val movementFn = mutateMovement(mut, p.movement.f, world, rules.forage.awakeningRate)
-    val attackFn = mutateAttack(mut, p.attack.g, world)
-    val movement = MovementOrgan(
-      f = movementFn,
-      period = mut.gene("период", p.movement.period.toDouble).round.toInt.max(1),
-      span = mut.gene("span", p.movement.span).max(0.1),
-      speed = mut.gene("скорость", p.movement.speed).max(0.05)
-    )
-    val maxHealth = mut.gene("макс. здоровье", p.maxHealth).max(1)
-    val awakened = movementFn.family != Family.Constant
-    val child = Organism(
-      id = id,
-      movement = movement,
-      attack = AttackOrgan(attackFn, rules.attack.maxReach, rules.attack.costFactor),
-      sector = p.sector,
-      pos = pos,
-      health = maxHealth,
-      maxHealth = maxHealth,
+    val g = mutate(inherited, mut, world, rules.forage.awakeningRate, minHealth = 1)
+    val awakened = g.movement.f.family != Family.Constant
+    val child = body(id, g, p.sector, pos, now, rules).copy(
       satiety = if awakened then rules.reproduction.offspringSatiety * rules.energy.maxSatiety else 0,
-      reserve = math.min(rules.forage.reserve, rules.energy.reservePerHealth * maxHealth),
-      litterSize = mut.step("помёт", p.litterSize, 1, rules.reproduction.maxLitter),
+      reserve = math.min(rules.forage.reserve, rules.energy.reservePerHealth * g.maxHealth),
       generation = p.generation + 1,
-      parents = Vector(p.id),
+      parents = Vector(p.id)
+    )
+    Offspring(child, mut.notes, awakened, g.genes.map((k, _) => k -> p.id).toMap, diff(inherited, g))
+
+  /** Мутации всех генов генотипа; `familyRate` — вероятность смены семейства функции движения. */
+  private def mutate(g: Genotype, mut: Mutator, world: World, familyRate: Double, minHealth: Double): Genotype =
+    val rules = world.rules
+    Genotype(
+      movement = MovementOrgan(
+        f = mutateMovement(mut, g.movement.f, world, familyRate),
+        period = mut.gene(Genes.Period, g.movement.period.toDouble).round.toInt.max(1),
+        span = mut.gene(Genes.Span, g.movement.span).max(0.1),
+        speed = mut.gene(Genes.Speed, g.movement.speed).max(0.05)
+      ),
+      attack = mutateAttack(mut, g.attack, world),
+      maxHealth = mut.gene(Genes.MaxHealth, g.maxHealth).max(minHealth),
+      litterSize = mut.step(Genes.Litter, g.litterSize, 1, rules.reproduction.maxLitter)
+    )
+
+  /** Организм с генами `g`, полным здоровьем, без сытости и жира. */
+  private def body(id: Int, g: Genotype, sector: SectorId, pos: Vec2, now: Long, rules: Rules): Organism =
+    Organism(
+      id = id,
+      movement = g.movement,
+      attack = AttackOrgan(g.attack, rules.attack.maxReach, rules.attack.costFactor),
+      sector = sector,
+      pos = pos,
+      health = g.maxHealth,
+      maxHealth = g.maxHealth,
+      satiety = 0,
+      reserve = 0,
+      litterSize = g.litterSize,
       lastReproductionTick = now
     )
-    Offspring(child, mut.notes, newSpecies = awakened)
+
+  /** Чем итоговые гены отличаются от унаследованных; появившиеся гены — с `before = None`. */
+  def diff(inherited: Genotype, result: Genotype): Map[String, GeneChange] =
+    val before = inherited.genes.toMap
+    result.genes.collect { case (k, v) if !before.get(k).contains(v) => k -> GeneChange(before.get(k), v) }.toMap
+
+  /** Гены, появившиеся при смене семейства, наследуются от того же родителя, что и семейство функции. */
+  private def completeOrigin(origin: Map[String, Int], g: Genotype): Map[String, Int] =
+    g.genes.flatMap { (k, _) =>
+      origin.get(k).orElse(Genes.familyOf(k).flatMap(origin.get)).map(k -> _)
+    }.toMap
 
   /** Точечные мутации функции движения и смена её семейства с вероятностью `familyRate`. */
   private def mutateMovement(mut: Mutator, f: MathFunction, world: World, familyRate: Double): MathFunction =
     val g = world.genesis.movement
-    mut.family("функция движения", mut.function("θ", f), g.families, g.functions, familyRate)
+    mut.family(Genes.MovementFamily, mut.function("θ", f), g.families, g.functions, familyRate)
 
   /** Мутации функции урона. Мутация, после которой организм не бьёт даже в упор, нежизнеспособна —
     * тогда остаётся исходная функция.
     */
   private def mutateAttack(mut: Mutator, g: MathFunction, world: World): MathFunction =
     val a = world.genesis.attack
-    val mutated = mut.family("функция урона", mut.function("D", g), a.families, a.functions, world.rules.mutation.familyRate)
+    val mutated = mut.family(Genes.AttackFamily, mut.function("D", g), a.families, a.functions, world.rules.mutation.familyRate)
     if AttackOrgan.positive(mutated(0)) > 0 then mutated else g
 
-  /** Скрещивание функций: одного семейства — покоэффициентно, разных — целиком от случайного родителя. */
-  def crossFunction(f1: MathFunction, f2: MathFunction, rnd: Random): MathFunction =
-    def pick(x: Double, y: Double) = if rnd.nextBoolean() then x else y
-    (f1, f2) match
-      case (Constant(c1), Constant(c2)) => Constant(pick(c1, c2))
-      case (Polynomial(c1), Polynomial(c2)) if c1.size == c2.size =>
-        Polynomial(c1.indices.map(i => pick(c1(i), c2(i))).toVector)
-      case (Logarithmic(a1, b1, c1), Logarithmic(a2, b2, c2)) =>
-        Logarithmic(pick(a1, a2), pick(b1, b2), pick(c1, c2))
-      case (Sinusoidal(a1, k1, p1, c1), Sinusoidal(a2, k2, p2, c2)) =>
-        Sinusoidal(pick(a1, a2), pick(k1, k2), pick(p1, p2), pick(c1, c2))
-      case (Exponential(a1, b1, c1), Exponential(a2, b2, c2)) =>
-        Exponential(pick(a1, a2), pick(b1, b2), pick(c1, c2))
-      case _ => if rnd.nextBoolean() then f1 else f2
+  /** Скрещивание с учётом происхождения: каждый ген берётся от случайного родителя, и это запоминается. */
+  private final class Inheritor(rnd: Random, a: Int, b: Int):
+    private val from = scala.collection.mutable.Map.empty[String, Int]
+
+    /** Ген → id родителя, от которого он взят. */
+    def origin: Map[String, Int] = from.toMap
+
+    /** Значение гена `key` от случайного родителя. */
+    def pick[A](key: String, x: A, y: A): A =
+      if rnd.nextBoolean() then { from(key) = a; x }
+      else { from(key) = b; y }
+
+    /** Скрещивание функций: одного семейства — покоэффициентно, разных — целиком от случайного родителя. */
+    def function(prefix: String, familyKey: String, f1: MathFunction, f2: MathFunction): MathFunction =
+      val (c1, c2) = (Genes.coefficients(prefix, f1), Genes.coefficients(prefix, f2))
+      if f1.family == f2.family && c1.size == c2.size then
+        pick(familyKey, (), ())
+        Genes.rebuild(f1, c1.zip(c2).map { case ((k, x), (_, y)) => pick(k, x, y) })
+      else
+        val chosen = pick(familyKey, f1, f2)
+        val source = from(familyKey)
+        Genes.coefficients(prefix, chosen).foreach((k, _) => from(k) = source)
+        chosen
 
   /** Применяет мутации и копит их описания для журнала. */
   private final class Mutator(rnd: Random, m: MutationRules):

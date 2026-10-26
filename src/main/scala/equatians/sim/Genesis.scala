@@ -39,8 +39,10 @@ object Genesis:
       val pos = Vec2(rnd.nextDouble() * world.sectorSize, rnd.nextDouble() * world.sectorSize)
       Forage.random(count + i, s, pos, rules, genesis, rnd, 0)
     }
+    val all = organisms ++ forageOrganisms
     World(
-      world, rules, genesis, organisms ++ forageOrganisms, seed,
+      world, rules, genesis, all, seed,
+      lineage = all.map(o => o.id -> Genealogy.record(o, 0)).toMap,
       nextId = count + forageOrganisms.size,
       forageSpawned = forageOrganisms.size
     )

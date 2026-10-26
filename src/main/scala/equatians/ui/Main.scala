@@ -33,6 +33,8 @@ final class SimulatorApp(config: AppConfig):
 
   private val view = WorldView(world, config.ui.trailLength)
   private val history = History(config.ui.stats.sampleInterval, config.ui.stats.maxSamples)
+  private val lineageWindow = LineageWindow(() => world)
+  private val lineageButton = JButton("Родословная (L)")
   private val statsWindow = SectorStatsWindow(
     () => world,
     history,
@@ -162,6 +164,9 @@ final class SimulatorApp(config: AppConfig):
     )
     refreshInfo()
 
+  /** Открывает родословную выбранного организма. */
+  private def openLineage(): Unit = view.selected.foreach(o => lineageWindow.show(o.id))
+
   /** Текущее занятие организма для заголовка карточки. */
   private def activity(o: Organism): String =
     if !o.alive then if o.forage then "съеден" else "погиб"
@@ -184,13 +189,20 @@ final class SimulatorApp(config: AppConfig):
           Formula.render(headingFormula, o.movement.headingLatex)
           Formula.render(argumentFormula, o.movement.argumentLatex)
           Formula.render(damageFormula, s"${o.attack.damageLatex}, \\quad ${o.attack.argumentLatex}")
+          val a = o.attack
+          def dmg(d: Double) = Narrative.num(o.strikeDamage(d, rules))
           attackInfo.setText(
-            s"<html>удар: дальность ${Narrative.num(o.attack.range)}, стоимость ${Narrative.num(o.attack.cost)}, " +
+            s"<html>скорость: <b>${Latex.number(o.movement.speed)}</b> ед./тик<br>" +
+              s"урон: в упор <b>${dmg(0)}</b>, на ½ дальности <b>${dmg(a.range / 2)}</b> " +
+              s"(×${String.format(Locale.ROOT, "%.2f", o.sizeFactor(rules))} за размер)<br>" +
+              s"дальность ${Narrative.num(a.range)}, стоимость ${Narrative.num(a.cost)}, " +
               s"перезарядка ${rules.attack.cooldown} т.</html>"
           )
+          lineageButton.setEnabled(true)
         case None =>
           Seq(headingFormula, argumentFormula, damageFormula).foreach(_.setIcon(null))
           attackInfo.setText("")
+          lineageButton.setEnabled(false)
 
     selected match
       case None =>
@@ -216,8 +228,7 @@ final class SimulatorApp(config: AppConfig):
           s"<html>поколение ${o.generation}, $origin<br>" +
             s"ген помёта ${o.litterSize}, детей ${o.offspringCount}, $ready<br>" +
             s"сектор (${o.sector.col}, ${o.sector.row}), позиция (${Narrative.num(o.pos.x)}, ${Narrative.num(o.pos.y)})<br>" +
-            s"возраст t = ${o.age}, x = ${Narrative.num(m.argument(o.age))}, шаг ${Narrative.num(m.speed)}<br>" +
-            s"радиус ${Narrative.num(o.radius(rules))}, урон ×${String.format(Locale.ROOT, "%.2f", o.sizeFactor(rules))} за размер<br>" +
+            s"возраст t = ${o.age}, x = ${Narrative.num(m.argument(o.age))}, радиус ${Narrative.num(o.radius(rules))}<br>" +
             s"расход ${String.format(Locale.ROOT, "%.3f", Simulation.metabolicCost(o, rules))} / тик, " +
             s"отхил до ${Narrative.num(rules.healing.rate)} / тик за ${Narrative.num(rules.healing.cost)} сытости</html>"
         )
@@ -286,6 +297,9 @@ final class SimulatorApp(config: AppConfig):
     add(damageFormula, 2)
     add(attackInfo)
     add(infoState)
+    lineageButton.setEnabled(false)
+    lineageButton.addActionListener(_ => openLineage())
+    add(lineageButton)
 
     logArea.setEditable(false)
     logArea.setLineWrap(true)
@@ -313,6 +327,7 @@ final class SimulatorApp(config: AppConfig):
     bind(KeyEvent.VK_R, "reset")(newWorld())
     bind(KeyEvent.VK_T, "trails")(toggleTrails())
     bind(KeyEvent.VK_S, "stats")(statsWindow.show(Scope.Whole))
+    bind(KeyEvent.VK_L, "lineage")(openLineage())
     bind(KeyEvent.VK_EQUALS, "faster")(changeSpeed(1))
     bind(KeyEvent.VK_PLUS, "faster2")(changeSpeed(1))
     bind(KeyEvent.VK_MINUS, "slower")(changeSpeed(-1))

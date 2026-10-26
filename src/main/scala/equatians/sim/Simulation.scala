@@ -58,7 +58,8 @@ object Simulation:
     val (fed, corpsesLeft) = scavenge(afterFight, ctx)
     val (resolved, newCorpses) = resolveDeaths(strikes, fed, ctx)
     val (alive, dead) = world.organisms.map(o => resolved(o.id)).partition(_.alive)
-    val (parents, newborns) = reproduce(alive, ctx)
+    val (parents, newbornOffspring) = reproduce(alive, ctx)
+    val newborns = newbornOffspring.map(_.organism)
     val (budders, budOffspring) = Forage.bud(parents, world.nextId + newborns.size, world)
     val buds = budOffspring.map(k => ctx.note(k.organism, Narrative.budded(k, ctx.byId.getOrElse(k.organism.parents.head, k.organism))))
     val grown = budders ++ newborns ++ buds
@@ -73,8 +74,25 @@ object Simulation:
       forageSpawned = world.forageSpawned + sprouts.size,
       buds = world.buds + buds.size,
       awakenings = world.awakenings + budOffspring.count(_.newSpecies),
-      events = countEvents(world.events, newborns, buds, sprouts, dead)
+      events = countEvents(world.events, newborns, buds, sprouts, dead),
+      lineage = updateLineage(world, newbornOffspring, budOffspring.zip(buds).map((k, o) => k.copy(organism = o)), sprouts, dead, grown)
     )
+
+  /** Записи о родившихся и появившихся, отметки о погибших; раз в `PruneInterval` тиков — прореживание. */
+  private def updateLineage(
+      world: World,
+      newborns: Vector[Genetics.Offspring],
+      buds: Vector[Genetics.Offspring],
+      sprouts: Vector[Organism],
+      dead: Vector[Organism],
+      alive: Vector[Organism]
+  ): Map[Int, LineageRecord] =
+    val born = (newborns ++ buds).map(k => Genealogy.record(k.organism, world.tick, k.origin, k.changes)) ++
+      sprouts.map(Genealogy.record(_, world.tick))
+    val withBirths = born.foldLeft(world.lineage)((acc, r) => acc.updated(r.id, r))
+    val withDeaths = Genealogy.markDead(withBirths, dead, world.tick)
+    if world.tick % Genealogy.PruneInterval != 0 then withDeaths
+    else Genealogy.prune(withDeaths, alive.map(_.id) ++ sprouts.map(_.id) ++ world.graveyard.map(_.id) ++ dead.map(_.id))
 
   /** Прибавляет события тика к накопительным счётчикам секторов. */
   private def countEvents(
@@ -394,8 +412,8 @@ object Simulation:
     *
     * @return родители после размножения и новорождённые
     */
-  private def reproduce(alive: Vector[Organism], ctx: Context): (Vector[Organism], Vector[Organism]) =
-    val start = (alive.iterator.map(o => o.id -> o).toMap, Set.empty[Int], Vector.empty[Organism], ctx.world.nextId)
+  private def reproduce(alive: Vector[Organism], ctx: Context): (Vector[Organism], Vector[Genetics.Offspring]) =
+    val start = (alive.iterator.map(o => o.id -> o).toMap, Set.empty[Int], Vector.empty[Genetics.Offspring], ctx.world.nextId)
     val (byId, _, newborns, _) = alive.sortBy(_.id).foldLeft(start) { case (state @ (orgs, mated, born, nextId), o0) =>
       val o = orgs(o0.id)
       o.behaviour match
@@ -415,7 +433,7 @@ object Simulation:
     *
     * @return оба родителя после оплаты и новорождённые с id начиная с `firstId`
     */
-  private def mate(a: Organism, b: Organism, firstId: Int, ctx: Context): (Organism, Organism, Vector[Organism]) =
+  private def mate(a: Organism, b: Organism, firstId: Int, ctx: Context): (Organism, Organism, Vector[Genetics.Offspring]) =
     val r = ctx.rules
     val size = ctx.world.config.sectorSize
     val rnd = Random(Rng.long(ctx.world.seed, ctx.now, a.id, 5))
@@ -438,5 +456,5 @@ object Simulation:
         offspringCount = o.offspringCount + kids.size
       )
       ctx.note(paid, Narrative.mated(partner.id, ids, wanted, share))
-    val born = kids.map(k => ctx.note(k.organism, Narrative.bornChild(k, a, b, r)))
+    val born = kids.map(k => k.copy(organism = ctx.note(k.organism, Narrative.bornChild(k, a, b, r))))
     (parent(a, b), parent(b, a), born)
