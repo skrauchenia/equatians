@@ -94,6 +94,8 @@ object Narrative:
     head + s": макс. здоровье ${num(o.maxHealth)}, скорость ${num(o.movement.speed)}; " +
       (if k.mutations.isEmpty then "без мутаций" else s"мутации: ${k.mutations.mkString("; ")}")
 
+  def crossed(to: SectorId): String = s"перешёл через проход в сектор (${to.col}, ${to.row})"
+
   def fullyHealed: String = "здоровье полностью восстановлено"
 
   def killedBy(killer: Int): String = s"погиб от удара #$killer"

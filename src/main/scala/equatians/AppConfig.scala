@@ -39,7 +39,8 @@ object AppConfig:
       world = WorldConfig(
         cols = c.getInt("world.cols"),
         rows = c.getInt("world.rows"),
-        sectorSize = c.getDouble("world.sector-size")
+        sectorSize = c.getDouble("world.sector-size"),
+        passage = c.getDouble("world.passage")
       ),
       population = PopulationConfig(
         count = c.getInt("population.count"),

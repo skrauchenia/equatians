@@ -13,6 +13,7 @@ import scala.util.Random
   *     кормовые организмы ничего не решают — только ползут;
   *     готовый к размножению сначала ищет готового партнёра своего вида, потом смотрит на чужаков;
   *  2. движение — обычное (по функции), к цели, к падали, к партнёру или от угрозы;
+  *     упёршийся в стену в месте прохода переходит в соседний сектор;
   *  3. метаболизм — оплата шага сытостью, затем жиром, затем здоровьем; потом отхил;
   *  4. удары — все преследователи, у которых цель в зоне удара, бьют одновременно;
   *  5. реакция — раненые решают, отвечать ли нападающему или бежать;
@@ -74,9 +75,13 @@ object Simulation:
       forageSpawned = world.forageSpawned + sprouts.size,
       buds = world.buds + buds.size,
       awakenings = world.awakenings + budOffspring.count(_.newSpecies),
-      events = countEvents(world.events, newborns, buds, sprouts, dead),
+      events = countEvents(world.events, newborns, buds, sprouts, dead, migrations(world.organisms, moved)),
       lineage = updateLineage(world, newbornOffspring, budOffspring.zip(buds).map((k, o) => k.copy(organism = o)), sprouts, dead, grown)
     )
+
+  /** Переходы активных организмов между секторами за тик: (откуда, куда). */
+  private def migrations(before: Vector[Organism], after: Vector[Organism]): Vector[(SectorId, SectorId)] =
+    before.zip(after).collect { case (a, b) if a.sector != b.sector && !a.forage => a.sector -> b.sector }
 
   /** Записи о родившихся и появившихся, отметки о погибших; раз в `PruneInterval` тиков — прореживание. */
   private def updateLineage(
@@ -100,9 +105,11 @@ object Simulation:
       newborns: Vector[Organism],
       buds: Vector[Organism],
       sprouts: Vector[Organism],
-      dead: Vector[Organism]
+      dead: Vector[Organism],
+      moves: Vector[(SectorId, SectorId)]
   ): Map[SectorId, SectorEvents] =
     val happened =
+      moves.flatMap((from, to) => Vector(from -> SectorEvents(left = 1), to -> SectorEvents(arrived = 1))) ++
       newborns.map(o => o.sector -> SectorEvents(births = 1)) ++
         buds.map(o => o.sector -> (if o.forage then SectorEvents(forageBorn = 1) else SectorEvents(awakenings = 1))) ++
         sprouts.map(o => o.sector -> SectorEvents(forageBorn = 1)) ++
@@ -259,17 +266,22 @@ object Simulation:
           if d.length > 0 then d * (o.movement.speed / d.length) else o.cruiseDisplacement
         }
     val target = o.pos + wanted
-    val (x, flipX) = reflect(target.x, size)
-    val (y, flipY) = reflect(target.y, size)
-    val cruising = o.behaviour == Cruise
-    val pos = Vec2(x, y)
-    o.copy(
-      pos = pos,
-      age = o.age + 1,
-      lastStep = pos - o.pos,
-      mirrorX = o.mirrorX ^ (cruising && flipX),
-      mirrorY = o.mirrorY ^ (cruising && flipY)
-    )
+    ctx.world.config.crossing(o.sector, target) match
+      case Some((sector, pos)) =>
+        val crossed = o.copy(sector = sector, pos = pos, age = o.age + 1, lastStep = wanted)
+        ctx.note(crossed, Narrative.crossed(sector))
+      case None =>
+        val (x, flipX) = reflect(target.x, size)
+        val (y, flipY) = reflect(target.y, size)
+        val cruising = o.behaviour == Cruise
+        val pos = Vec2(x, y)
+        o.copy(
+          pos = pos,
+          age = o.age + 1,
+          lastStep = pos - o.pos,
+          mirrorX = o.mirrorX ^ (cruising && flipX),
+          mirrorY = o.mirrorY ^ (cruising && flipY)
+        )
 
   /** Отражает координату `v` в отрезок [0, size]; второй элемент — было ли отражение. */
   private def reflect(v: Double, size: Double): (Double, Boolean) =

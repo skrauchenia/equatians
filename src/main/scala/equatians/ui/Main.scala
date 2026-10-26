@@ -170,6 +170,7 @@ final class SimulatorApp(config: AppConfig):
   private val colsSpinner = JSpinner(SpinnerNumberModel(config.world.cols, 1, 20, 1))
   private val rowsSpinner = JSpinner(SpinnerNumberModel(config.world.rows, 1, 20, 1))
   private val sizeSpinner = JSpinner(SpinnerNumberModel(config.world.sectorSize.round.toInt, 20, 1000, 10))
+  private val passageSpinner = JSpinner(SpinnerNumberModel((config.world.passage * 100).round.toInt, 0, 100, 5))
   private val zoomLabel = JLabel("100%")
 
   /** Две строки из `rows`, без растягивания по ширине панели (иначе BoxLayout раздувает их по высоте). */
@@ -189,16 +190,18 @@ final class SimulatorApp(config: AppConfig):
     cs.foreach(row.add)
     row
 
-  /** Сетка и размер сектора; «Применить» создаёт новый мир с этой геометрией.
-    * Две строки — в одну по ширине панели не помещается.
+  /** Сетка, размер сектора и ширина проходов; «Применить» создаёт новый мир с этой геометрией.
+    * Несколько строк — в одну по ширине панели не помещается.
     */
   private def worldControls: JComponent =
     val apply = JButton("Применить — новый мир")
-    apply.setToolTipText("Создать новый мир с такой сеткой секторов и размером сектора")
+    apply.setToolTipText("Создать новый мир с такой сеткой секторов, размером сектора и шириной проходов")
+    passageSpinner.setToolTipText("Ширина прохода между соседними секторами, % стороны сектора (0 — без проходов)")
     apply.setFocusable(false)
     apply.addActionListener(_ => applyGeometry())
     stacked(
       line(JLabel("Сетка"), colsSpinner, JLabel("×"), rowsSpinner, JLabel(", сектор"), sizeSpinner),
+      line(JLabel("Проход между секторами, %"), passageSpinner),
       line(apply)
     )
 
@@ -225,7 +228,8 @@ final class SimulatorApp(config: AppConfig):
     worldConfig = WorldConfig(
       cols = colsSpinner.getValue.asInstanceOf[Int],
       rows = rowsSpinner.getValue.asInstanceOf[Int],
-      sectorSize = sizeSpinner.getValue.asInstanceOf[Int].toDouble
+      sectorSize = sizeSpinner.getValue.asInstanceOf[Int].toDouble,
+      passage = passageSpinner.getValue.asInstanceOf[Int] / 100.0
     )
     view.fitView()
     newWorld()

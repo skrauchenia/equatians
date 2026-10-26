@@ -444,6 +444,33 @@ class ModelSuite extends munit.FunSuite:
     val end = run(w, 500)
     assert(end.organisms.forall(o => o.sector == SectorId(0, 0) && o.pos.x <= 60 && o.pos.y <= 60))
 
+  test("organism walks through a passage into the neighbouring sector"):
+    val cfg2 = WorldConfig(2, 1, 100, passage = 0.1)
+    val o = organism(0, pos = Vec2(99.5, 50))
+    val end = Simulation.step(World(cfg2, rules, cfg.genesis, Vector(o), seed = 1))
+    val moved = end.organisms.head
+    assertEquals(moved.sector, SectorId(1, 0))
+    assertEqualsDouble(moved.pos.x, 0.5, 1e-9)
+    assertEqualsDouble(moved.pos.y, 50, 1e-9)
+    assert(moved.log.last.text.contains("перешёл через проход в сектор (1, 0)"))
+    assertEquals((end.events(SectorId(0, 0)).left, end.events(SectorId(1, 0)).arrived), (1L, 1L))
+
+  test("walls outside the passage and the outer walls of the world stay solid"):
+    val cfg2 = WorldConfig(2, 1, 100, passage = 0.1)
+    def stepFrom(sector: SectorId, pos: Vec2) =
+      Simulation.step(World(cfg2, rules, cfg.genesis, Vector(organism(0, pos = pos).copy(sector = sector)), seed = 1)).organisms.head
+    val offPassage = stepFrom(SectorId(0, 0), Vec2(99.5, 20))
+    assertEquals(offPassage.sector, SectorId(0, 0))
+    assert(offPassage.mirrorX)
+    val outer = stepFrom(SectorId(1, 0), Vec2(99.5, 50))
+    assertEquals(outer.sector, SectorId(1, 0))
+
+  test("forage crawls through passages too"):
+    val cfg2 = WorldConfig(1, 2, 100, passage = 0.2)
+    val f = forageAt(0, Vec2(50, 99.95), heading = math.Pi / 2)
+    val end = Simulation.step(World(cfg2, rules, cfg.genesis, Vector(f), seed = 1))
+    assertEquals(end.organisms.head.sector, SectorId(0, 1))
+
   test("default config file loads"):
     assertEquals(cfg.genesis.movement.families.toSet, Family.values.toSet - Family.Constant)
     assertEquals(cfg.genesis.attack.functions.cubic.size, 4)

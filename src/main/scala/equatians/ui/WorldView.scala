@@ -36,7 +36,8 @@ object Palette:
 /** Рисует сектора мира и организмы в них. Следы хранятся только здесь, в модели их нет. */
 final class WorldView(initial: World, trailLength: Int) extends JPanel:
   private var world: World = initial
-  private val trails = mutable.Map.empty[Int, mutable.ArrayDeque[Vec2]]
+  /** Следы: позиции вместе с сектором — после перехода через проход след рвётся, а не тянется через карту. */
+  private val trails = mutable.Map.empty[Int, mutable.ArrayDeque[(SectorId, Vec2)]]
 
   /** Рисовать ли следы организмов. */
   var showTrails: Boolean = true
@@ -122,7 +123,7 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     trails.filterInPlace((id, _) => alive(id))
     for o <- w.organisms if !o.forage do
       val trail = trails.getOrElseUpdate(o.id, mutable.ArrayDeque.empty)
-      trail.append(o.pos)
+      trail.append(o.sector -> o.pos)
       if trail.size > trailLength then trail.removeHead()
     repaint()
 
@@ -189,6 +190,7 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     g.transform(viewport.transform)
     val l = currentLayout
     world.config.sectors.foreach(drawSector(g, l, _))
+    world.config.sectors.foreach(drawPassages(g, l, _))
     world.corpses.foreach(drawCarrion(g, l, _))
     if showTrails then world.organisms.foreach(drawTrail(g, l, _))
     world.organisms.foreach(drawIntent(g, l, _))
@@ -216,15 +218,48 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     g.setFont(g.getFont.deriveFont(11f))
     g.drawString(s"(${s.col}, ${s.row})", (r.getMinX + 6).toFloat, (r.getMinY + 15).toFloat)
 
+  /** Коридоры к соседям справа и сверху: заливка поверх промежутка между секторами и разрыв в их рамках. */
+  private def drawPassages(g: Graphics2D, l: Layout, s: SectorId): Unit =
+    val cfg = world.config
+    if cfg.passage > 0 then
+      val mid = cfg.sectorSize / 2
+      val hw = cfg.passageHalfWidth
+      val r = l.sectorRect(s)
+      val east = SectorId(s.col + 1, s.row)
+      if cfg.contains(east) then
+        val (_, top) = l.toScreen(s, Vec2(0, mid + hw))
+        val (_, bottom) = l.toScreen(s, Vec2(0, mid - hw))
+        val next = l.sectorRect(east)
+        corridor(g, Rectangle2D.Double(r.getMaxX - 1, top, next.getMinX - r.getMaxX + 2, bottom - top), horizontal = true)
+      val north = SectorId(s.col, s.row + 1)
+      if cfg.contains(north) then
+        val (left, _) = l.toScreen(s, Vec2(mid - hw, 0))
+        val (right, _) = l.toScreen(s, Vec2(mid + hw, 0))
+        val next = l.sectorRect(north)
+        corridor(g, Rectangle2D.Double(left, next.getMaxY - 1, right - left, r.getMinY - next.getMaxY + 2), horizontal = false)
+
+  /** Коридор: фон сектора и две стенки вдоль направления прохода. */
+  private def corridor(g: Graphics2D, rect: Rectangle2D, horizontal: Boolean): Unit =
+    g.setColor(Palette.Sector)
+    g.fill(rect)
+    g.setColor(Palette.SectorBorder)
+    g.setStroke(BasicStroke(1.5f))
+    if horizontal then
+      g.draw(Line2D.Double(rect.getMinX, rect.getMinY, rect.getMaxX, rect.getMinY))
+      g.draw(Line2D.Double(rect.getMinX, rect.getMaxY, rect.getMaxX, rect.getMaxY))
+    else
+      g.draw(Line2D.Double(rect.getMinX, rect.getMinY, rect.getMinX, rect.getMaxY))
+      g.draw(Line2D.Double(rect.getMaxX, rect.getMinY, rect.getMaxX, rect.getMaxY))
+
   /** След организма — ломаная по его последним позициям; у выбранного ярче. */
   private def drawTrail(g: Graphics2D, l: Layout, o: Organism): Unit =
     trails.get(o.id).filter(_.size > 1).foreach { trail =>
       val path = Path2D.Double()
-      val (x0, y0) = l.toScreen(o.sector, trail.head)
-      path.moveTo(x0, y0)
-      trail.iterator.drop(1).foreach { p =>
-        val (x, y) = l.toScreen(o.sector, p)
-        path.lineTo(x, y)
+      var previous: Option[SectorId] = None
+      trail.foreach { (sector, p) =>
+        val (x, y) = l.toScreen(sector, p)
+        if previous.contains(sector) then path.lineTo(x, y) else path.moveTo(x, y)
+        previous = Some(sector)
       }
       val c = Palette.byFamily(o.family)
       val alpha = if selectedId.contains(o.id) then 200 else 70

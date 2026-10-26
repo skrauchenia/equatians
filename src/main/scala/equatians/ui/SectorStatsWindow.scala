@@ -136,5 +136,6 @@ final class SectorStatsWindow(
     s"<html>Тик ${w.tick}. Активных <b>${active.size}</b> (видов ${active.map(_.species).distinct.size}), " +
       s"корма <b>${forage.size}</b>, падали $corpses, макс. поколение $maxGen.<br>" +
       s"С начала: рождений ${events.births}, пробуждений ${events.awakenings}, смертей ${events.deaths}, " +
+      s"пришло ${events.arrived}, ушло ${events.left}, " +
       s"корма появилось ${events.forageBorn}, съедено ${events.forageEaten}. " +
       s"Снимков ${in.samples.size}, раз в ${history.currentInterval} тиков.</html>"
