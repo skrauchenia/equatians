@@ -121,7 +121,9 @@ object AppConfig:
         fleeSatietyThreshold = c.getDouble("behaviour.flee-satiety-threshold"),
         fleeReserveThreshold = c.getDouble("behaviour.flee-reserve-threshold"),
         fleeProbability = c.getDouble("behaviour.flee-probability"),
-        loseTargetFactor = c.getDouble("behaviour.lose-target-factor")
+        loseTargetFactor = c.getDouble("behaviour.lose-target-factor"),
+        aggressionChase = c.getDouble("behaviour.aggression-chase"),
+        aggressionOverFood = c.getDouble("behaviour.aggression-over-food")
       ),
       attack = AttackRules(
         maxReach = c.getDouble("attack.max-reach"),
@@ -136,6 +138,7 @@ object AppConfig:
       health = range(c, "health"),
       reserve = range(c, "reserve"),
       litterSize = range(c, "litter-size"),
+      aggression = range(c, "aggression"),
       movement = MovementGenesis(
         families = families(c, "movement.families"),
         period = range(c, "movement.period"),

@@ -54,7 +54,8 @@ object Genetics:
       ),
       attack = inh.function("D", Genes.AttackFamily, a.attack.g, b.attack.g),
       maxHealth = inh.pick(Genes.MaxHealth, a.sizeGene, b.sizeGene),
-      litterSize = inh.pick(Genes.Litter, a.litterSize, b.litterSize)
+      litterSize = inh.pick(Genes.Litter, a.litterSize, b.litterSize),
+      aggression = inh.pick(Genes.Aggression, a.aggression, b.aggression)
     )
     val mut = Mutator(rnd, rules.mutation)
     val g = mutate(crossed, mut, world, rules.mutation.familyRate, minHealth = 5)
@@ -99,7 +100,8 @@ object Genetics:
       ),
       attack = mutateAttack(mut, g.attack, world),
       maxHealth = mut.gene(Genes.MaxHealth, g.maxHealth).max(minHealth),
-      litterSize = mut.step(Genes.Litter, g.litterSize, 1, rules.reproduction.maxLitter)
+      litterSize = mut.step(Genes.Litter, g.litterSize, 1, rules.reproduction.maxLitter),
+      aggression = mut.gene(Genes.Aggression, g.aggression).max(0).min(1)
     )
 
   /** Организм с генами `g`, полным здоровьем, без сытости и жира. У корма тело — `forage.health`. */
@@ -119,7 +121,8 @@ object Genetics:
       reserve = 0,
       litterSize = g.litterSize,
       lastReproductionTick = now,
-      healthGene = Option.when(forage)(g.maxHealth)
+      healthGene = Option.when(forage)(g.maxHealth),
+      aggression = g.aggression
     )
 
   /** Чем итоговые гены отличаются от унаследованных; появившиеся гены — с `before = None`. */

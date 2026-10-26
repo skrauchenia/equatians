@@ -8,6 +8,7 @@ enum Trait(val title: String, val value: (Organism, Rules) => Double):
   // Ген размера: у корма — спящий (тело корма всегда маленькое), у остальных совпадает с телом.
   case MaxHealth     extends Trait("макс. здоровье (ген)", (o, _) => o.sizeGene)
   case Litter        extends Trait("ген помёта", (o, _) => o.litterSize)
+  case Aggression    extends Trait("агрессивность", (o, _) => o.aggression)
   case Generation    extends Trait("поколение", (o, _) => o.generation)
   case Period        extends Trait("период движения", (o, _) => o.movement.period)
   case Span          extends Trait("span движения", (o, _) => o.movement.span)

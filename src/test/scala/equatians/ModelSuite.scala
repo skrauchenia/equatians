@@ -482,6 +482,36 @@ class ModelSuite extends munit.FunSuite:
     val end = Simulation.step(World(cfg2, rules, cfg.genesis, Vector(f), seed = 1))
     assertEquals(end.organisms.head.sector, SectorId(0, 1))
 
+  test("aggression makes a sated organism attack and stops it from fleeing"):
+    val calm = organism(0, satiety = 100, reserve = 40)
+    val fierce = calm.copy(aggression = 1)
+    assertEquals(Simulation.choose(calm, 9, 0.1, rules), Behaviour.Flee(9))
+    assertEquals(Simulation.choose(calm, 9, 0.9, rules), Behaviour.Cruise)
+    assertEquals(Simulation.choose(fierce, 9, 0.1, rules), Behaviour.Chase(9))
+    assertEquals(Simulation.choose(fierce, 9, 0.9, rules), Behaviour.Cruise)
+    assertEqualsDouble(Simulation.chaseProbability(fierce, rules), rules.behaviour.aggressionChase, 1e-9)
+    assertEqualsDouble(Simulation.chaseProbability(calm, rules), 0.0, 1e-9)
+
+  test("an aggressive organism picks a fight over food"):
+    val brawly = rules.copy(behaviour = rules.behaviour.copy(aggressionOverFood = 1))
+    val fierce = organism(0, satiety = 50).copy(aggression = 1)
+    val stranger = organism(1, f = sine, pos = Vec2(56, 50))
+    val f = forageAt(2, Vec2(52, 50))
+    val end = Simulation.step(world(fierce, stranger, f).copy(rules = brawly))
+    val o = end.organisms.find(_.id == 0).get
+    assertEquals(o.behaviour, Behaviour.Chase(1))
+    assert(o.log.exists(_.text.startsWith("агрессия")), o.log)
+
+  test("aggression is inherited and stays within 0..1"):
+    val a = organism(0).copy(aggression = 0.2)
+    val b = organism(1).copy(aggression = 0.9)
+    val wild = rules.copy(mutation = rules.mutation.copy(rate = 1, relativeSigma = 5, familyRate = 0))
+    for seed <- 0 until 30 do
+      val child = Genetics.offspring(100, a, b, Vec2(50, 50), 0, world(a, b).copy(rules = wild), Random(seed)).organism
+      assert(child.aggression >= 0 && child.aggression <= 1, child.aggression)
+    val quiet = Genetics.offspring(100, a, b, Vec2(50, 50), 0, world(a, b).copy(rules = noMutation), Random(1)).organism
+    assert(Set(0.2, 0.9)(quiet.aggression))
+
   test("default config file loads"):
     assertEquals(cfg.genesis.movement.families.toSet, Family.values.toSet - Family.Constant)
     assertEquals(cfg.genesis.attack.functions.cubic.size, 4)

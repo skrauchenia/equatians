@@ -50,12 +50,12 @@ final case class LineageRecord(
   def forage: Boolean = species == Family.Constant
 
 /** Наследуемая часть организма: всё, что передаётся потомкам и мутирует. */
-final case class Genotype(movement: MovementOrgan, attack: MathFunction, maxHealth: Double, litterSize: Int):
+final case class Genotype(movement: MovementOrgan, attack: MathFunction, maxHealth: Double, litterSize: Int, aggression: Double):
   /** Гены в постоянном порядке: движение, удар, тело. */
   def genes: Vector[(String, GeneValue)] = Genes.from(this)
 
 object Genotype:
-  def of(o: Organism): Genotype = Genotype(o.movement, o.attack.g, o.sizeGene, o.litterSize)
+  def of(o: Organism): Genotype = Genotype(o.movement, o.attack.g, o.sizeGene, o.litterSize, o.aggression)
 
 /** Имена и значения генов организма. Имена совпадают с теми, что генетика пишет в журнал о мутациях. */
 object Genes:
@@ -66,6 +66,7 @@ object Genes:
   val Speed = "скорость"
   val MaxHealth = "макс. здоровье"
   val Litter = "помёт"
+  val Aggression = "агрессивность"
 
   /** Все гены организма в постоянном порядке: движение, удар, тело. */
   def of(o: Organism): Vector[(String, GeneValue)] = from(Genotype.of(o))
@@ -83,7 +84,8 @@ object Genes:
       coefficients("D", g.attack).map((k, v) => k -> GeneValue.Num(v)) ++
       Vector(
         MaxHealth -> GeneValue.Num(g.maxHealth),
-        Litter -> GeneValue.Num(g.litterSize)
+        Litter -> GeneValue.Num(g.litterSize),
+        Aggression -> GeneValue.Num(g.aggression)
       )
 
   /** Ген семейства функции, к которой относится коэффициент `key` (θ — движение, D — удар). */

@@ -50,11 +50,13 @@ final case class AttackGenesis(families: Vector[Family], functions: FunctionRang
   * @param health  максимальное здоровье
   * @param reserve начальный жир как доля от его максимума
   * @param litterSize ген размера помёта (округляется до целого)
+  * @param aggression ген агрессивности, 0..1
   */
 final case class GenesisConfig(
     health: GeneRange,
     reserve: GeneRange,
     litterSize: GeneRange,
+    aggression: GeneRange,
     movement: MovementGenesis,
     attack: AttackGenesis
 )

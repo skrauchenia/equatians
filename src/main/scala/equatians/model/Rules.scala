@@ -100,7 +100,11 @@ final case class ReproductionRules(
   */
 final case class MutationRules(rate: Double, relativeSigma: Double, absoluteSigma: Double, familyRate: Double)
 
-/** Параметры выбора поведения при встрече с чужим организмом. */
+/** Параметры выбора поведения при встрече с чужим организмом.
+  *
+  * @param aggressionChase    насколько агрессивность поднимает вероятность нападения у сытого
+  * @param aggressionOverFood вероятность за тик (на единицу агрессивности) предпочесть драку еде
+  */
 final case class BehaviourRules(
     decisionInterval: Int,
     hungerThreshold: Double,
@@ -108,7 +112,9 @@ final case class BehaviourRules(
     fleeSatietyThreshold: Double,
     fleeReserveThreshold: Double,
     fleeProbability: Double,
-    loseTargetFactor: Double
+    loseTargetFactor: Double,
+    aggressionChase: Double,
+    aggressionOverFood: Double
 ):
   require(decisionInterval > 0, "decision-interval должен быть > 0")
   require(hungerThreshold > 0, "hunger-threshold должен быть > 0")

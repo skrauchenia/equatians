@@ -118,23 +118,26 @@ object Simulation:
       acc.updated(sector, acc.getOrElse(sector, SectorEvents.Zero) + e)
     }
 
-  /** Вероятность того, что организм выберет охоту: 0 на пороге голода, растёт линейно к нулевой сытости. */
+  /** Вероятность нападения на чужака: от голода (0 на пороге, растёт линейно к нулевой сытости)
+    * и от агрессивности: 1 − (1 − p_голода) · (1 − агрессивность · aggression-chase).
+    */
   def chaseProbability(o: Organism, rules: Rules): Double =
     val b = rules.behaviour
     val sat = o.satietyFraction(rules)
-    if sat >= b.hungerThreshold then 0.0
-    else b.maxChaseProbability * (1 - sat / b.hungerThreshold)
+    val hunger = if sat >= b.hungerThreshold then 0.0 else b.maxChaseProbability * (1 - sat / b.hungerThreshold)
+    1 - (1 - hunger) * (1 - o.aggression * b.aggressionChase)
 
-  /** Выбор поведения при встрече с чужим `other` по броску `roll`:
-    * голодный — охотится с вероятностью [[chaseProbability]], сытый с запасом жира — отдаляется
-    * с вероятностью `flee-probability`, иначе продолжает обычное движение.
+  /** Выбор поведения при встрече с чужим `other` по одному броску `roll`:
+    * охота с вероятностью [[chaseProbability]] (голод и агрессивность); иначе сытый с запасом жира
+    * отдаляется с вероятностью `flee-probability · (1 − агрессивность)`; иначе — обычное движение.
     */
   def choose(o: Organism, other: Int, roll: Double, rules: Rules): Behaviour =
     val b = rules.behaviour
     val p = chaseProbability(o, rules)
-    if p > 0 then if roll < p then Chase(other) else Cruise
-    else if o.satietyFraction(rules) >= b.fleeSatietyThreshold && o.reserveFraction(rules) >= b.fleeReserveThreshold then
-      if roll < b.fleeProbability then Flee(other) else Cruise
+    val sated = o.satietyFraction(rules) >= b.fleeSatietyThreshold && o.reserveFraction(rules) >= b.fleeReserveThreshold
+    val flee = if sated then (1 - p) * b.fleeProbability * (1 - o.aggression) else 0.0
+    if roll < p then Chase(other)
+    else if roll < p + flee then Flee(other)
     else Cruise
 
   /** Ближайший организм другого вида в своём секторе в радиусе восприятия. */
@@ -191,25 +194,32 @@ object Simulation:
         ctx.note(o.copy(behaviour = Cruise), Narrative.mateGaveUp(p))
       case _ => o
 
-    // Падаль важнее корма, корм — важнее охоты на чужаков и обычного движения.
+    // Падаль важнее корма, корм — важнее охоты на чужаков и обычного движения. Но агрессивный может бросить
+    // еду ради драки, а уже дерущегося еда отвлекает лишь с вероятностью (1 − агрессивность).
     val sat = kept.satietyFraction(r)
-    val huntingForage = kept.behaviour match
-      case Chase(t) => ctx.isForage(t)
-      case _        => false
+    val (huntingForage, fighting) = kept.behaviour match
+      case Chase(t) => (ctx.isForage(t), !ctx.isForage(t))
+      case _        => (false, false)
+    val brawl = kept.behaviour match
+      case Cruise | Scavenge(_) | Chase(_) if !fighting && ctx.roll(kept, 7) < kept.aggression * r.behaviour.aggressionOverFood =>
+        nearestStranger(kept, ctx)
+      case _ => None
+    val distractible = !fighting || ctx.roll(kept, 8) >= kept.aggression
     val carrion = kept.behaviour match
-      case Cruise | Chase(_) if sat < r.scavenging.satietyThreshold =>
+      case Cruise | Chase(_) if distractible && sat < r.scavenging.satietyThreshold =>
         nearest(kept, ctx.corpsesBySector, _.pos, ctx).filter(_ => ctx.roll(kept, 3) < r.scavenging.probability)
       case _ => None
     val forage = kept.behaviour match
-      case Cruise | Chase(_) if carrion.isEmpty && !huntingForage && sat < r.forage.satietyThreshold =>
+      case Cruise | Chase(_) if distractible && carrion.isEmpty && !huntingForage && sat < r.forage.satietyThreshold =>
         nearest(kept, ctx.forageBySector, _.pos, ctx).filter(_ => ctx.roll(kept, 6) < r.forage.probability)
       case _ => None
 
-    (carrion, forage) match
-      case (Some((c, dist)), _) => ctx.note(kept.copy(behaviour = Scavenge(c.id)), Narrative.spotCarrion(c, dist, r, kept))
-      case (_, Some((f, dist))) => ctx.note(kept.copy(behaviour = Chase(f.id)), Narrative.spotForage(f, dist, r, kept))
-      case _ if huntingForage   => kept
-      case _                    => decideSocial(o, kept, ctx)
+    (brawl, carrion, forage) match
+      case (Some((s, dist)), _, _) => ctx.note(kept.copy(behaviour = Chase(s.id)), Narrative.brawl(s, dist, r, kept))
+      case (_, Some((c, dist)), _) => ctx.note(kept.copy(behaviour = Scavenge(c.id)), Narrative.spotCarrion(c, dist, r, kept))
+      case (_, _, Some((f, dist))) => ctx.note(kept.copy(behaviour = Chase(f.id)), Narrative.spotForage(f, dist, r, kept))
+      case _ if huntingForage      => kept
+      case _                       => decideSocial(o, kept, ctx)
 
   /** Решения о партнёре и чужаках — раз в `decision-interval` тиков, если организм не занят едой или парой. */
   private def decideSocial(o: Organism, kept: Organism, ctx: Context): Organism =

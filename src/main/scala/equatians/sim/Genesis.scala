@@ -27,7 +27,8 @@ object Genesis:
         maxHealth = health,
         satiety = rules.energy.maxSatiety,
         reserve = reserveShare * rules.energy.reservePerHealth * health,
-        litterSize = genesis.litterSize.sample(rnd).round.toInt.max(1).min(rules.reproduction.maxLitter)
+        litterSize = genesis.litterSize.sample(rnd).round.toInt.max(1).min(rules.reproduction.maxLitter),
+        aggression = genesis.aggression.sample(rnd).max(0).min(1)
       )
       o.logged(0, Narrative.born(o, rules), rules.logSize)
     }

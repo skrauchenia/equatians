@@ -35,7 +35,7 @@ object Forage:
     ).logged(tick, Narrative.sprouted, rules.logSize)
 
   /** Корм со случайными генами: курс из [0, 2π), скорость из `forage`,
-    * спящие период, span, функция урона и здоровье — из диапазонов генезиса.
+    * спящие период, span, функция урона, здоровье и агрессивность — из диапазонов генезиса.
     */
   def random(id: Int, sector: SectorId, pos: Vec2, rules: Rules, genesis: GenesisConfig, rnd: Random, tick: Long): Organism =
     val g = genesis.movement
@@ -47,6 +47,7 @@ object Forage:
     )
     val attack = Genesis.randomAttack(genesis.attack, rules.attack, rnd)
     create(id, sector, pos, movement, attack, genesis.health.sample(rnd), tick, rules)
+      .copy(aggression = genesis.aggression.sample(rnd).max(0).min(1))
 
   /** Корм, появившийся сам по себе: в каждом секторе с вероятностью `spawn-rate`, если там меньше предела.
     * Случайность детерминирована сидом и тиком; id выдаются начиная с `firstId`.

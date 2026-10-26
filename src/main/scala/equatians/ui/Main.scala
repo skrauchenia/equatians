@@ -266,7 +266,9 @@ final class SimulatorApp(config: AppConfig):
               s"урон: в упор <b>${dmg(0)}</b>, на ½ дальности <b>${dmg(a.range / 2)}</b> " +
               s"(×${String.format(Locale.ROOT, "%.2f", o.sizeFactor(rules))} за размер)<br>" +
               s"дальность ${Narrative.num(a.range)}, стоимость ${Narrative.num(a.cost)}, " +
-              s"перезарядка ${rules.attack.cooldown} т.</html>"
+              s"перезарядка ${rules.attack.cooldown} т.<br>" +
+              s"агрессивность: <b>${Latex.number(o.aggression)}</b>" +
+              (if o.forage then " (спящий ген)" else "") + "</html>"
           )
           lineageButton.setEnabled(true)
         case None =>

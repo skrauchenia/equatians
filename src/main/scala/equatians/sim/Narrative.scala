@@ -78,6 +78,9 @@ object Narrative:
       (if k.mutations.isEmpty then "без мутаций" else s"мутации: ${k.mutations.mkString("; ")}") +
       (if k.newSpecies then s" — НОВЫЙ ВИД (${o.family.title})" else "")
 
+  def brawl(target: Organism, dist: Double, rules: Rules, o: Organism): String =
+    s"агрессия (${Latex.number(o.aggression)}): вместо еды нападает на #${target.id} (${target.family.title}) в ${num(dist)}; ${vitals(o, rules)}"
+
   def spotForage(f: Organism, dist: Double, rules: Rules, o: Organism): String =
     s"заметил корм #${f.id} в ${num(dist)} — охотится; ${vitals(o, rules)}"
 

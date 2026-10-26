@@ -34,15 +34,17 @@ final class SectorStatsWindow(
     Tab("Атака", 2, 2, Vector(
       StatsCharts.attackScatter, StatsCharts.attackFamilies, StatsCharts.attackTrends,
       StatsCharts.traitHistogram(_, Trait.ContactDamage))),
-    Tab("Признаки", 2, 4, Vector(
+    Tab("Признаки", 3, 4, Vector(
       StatsCharts.traitTrend(_, Trait.Speed, withForage = true),
       StatsCharts.traitTrend(_, Trait.MaxHealth, withForage = true),
+      StatsCharts.traitTrend(_, Trait.Aggression, withForage = true),
       StatsCharts.traitTrend(_, Trait.Litter, withForage = false),
       StatsCharts.traitTrend(_, Trait.Generation, withForage = false),
       StatsCharts.traitTrend(_, Trait.Period, withForage = false),
       StatsCharts.traitTrend(_, Trait.Span, withForage = false),
       StatsCharts.traitHistogram(_, Trait.Speed),
-      StatsCharts.traitHistogram(_, Trait.MaxHealth))),
+      StatsCharts.traitHistogram(_, Trait.MaxHealth),
+      StatsCharts.traitHistogram(_, Trait.Aggression))),
     Tab("Энергия и корм", 2, 2, Vector(
       StatsCharts.vitals, StatsCharts.forageRates,
       StatsCharts.traitHistogram(_, Trait.Satiety), StatsCharts.traitHistogram(_, Trait.Reserve)))

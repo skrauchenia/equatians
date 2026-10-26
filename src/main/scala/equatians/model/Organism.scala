@@ -44,6 +44,8 @@ final case class LogEntry(tick: Long, text: String)
   * @param healthGene спящий ген макс. здоровья у корма: тело корма всегда маленькое (`forage.health`),
   *                   а этот ген наследуется, мутирует и включается, когда клон пробуждается.
   *                   У активных организмов `None` — их ген и есть `maxHealth`
+  * @param aggression ген агрессивности 0..1: чем выше, тем охотнее организм нападает на чужаков, реже убегает
+  *                   и чаще предпочитает драку еде. У корма спящий
   */
 final case class Organism(
     id: Int,
@@ -67,7 +69,8 @@ final case class Organism(
     parents: Vector[Int] = Vector.empty,
     lastReproductionTick: Long = Long.MinValue / 2,
     offspringCount: Int = 0,
-    healthGene: Option[Double] = None
+    healthGene: Option[Double] = None,
+    aggression: Double = 0
 ):
   /** Семейство функции органа движения. */
   def family: Family = movement.f.family
