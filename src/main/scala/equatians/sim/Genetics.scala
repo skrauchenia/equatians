@@ -53,7 +53,7 @@ object Genetics:
         speed = inh.pick(Genes.Speed, a.movement.speed, b.movement.speed)
       ),
       attack = inh.function("D", Genes.AttackFamily, a.attack.g, b.attack.g),
-      maxHealth = inh.pick(Genes.MaxHealth, a.maxHealth, b.maxHealth),
+      maxHealth = inh.pick(Genes.MaxHealth, a.sizeGene, b.sizeGene),
       litterSize = inh.pick(Genes.Litter, a.litterSize, b.litterSize)
     )
     val mut = Mutator(rnd, rules.mutation)
@@ -76,11 +76,12 @@ object Genetics:
     val rules = world.rules
     val inherited = Genotype.of(p)
     val mut = Mutator(rnd, rules.mutation)
-    val g = mutate(inherited, mut, world, rules.forage.awakeningRate, minHealth = 1)
+    val g = mutate(inherited, mut, world, rules.forage.awakeningRate, minHealth = 5)
     val awakened = g.movement.f.family != Family.Constant
-    val child = body(id, g, p.sector, pos, now, rules).copy(
+    val grown = body(id, g, p.sector, pos, now, rules)
+    val child = grown.copy(
       satiety = if awakened then rules.reproduction.offspringSatiety * rules.energy.maxSatiety else 0,
-      reserve = math.min(rules.forage.reserve, rules.energy.reservePerHealth * g.maxHealth),
+      reserve = math.min(rules.forage.reserve, grown.maxReserve(rules)),
       generation = p.generation + 1,
       parents = Vector(p.id)
     )
@@ -101,20 +102,24 @@ object Genetics:
       litterSize = mut.step(Genes.Litter, g.litterSize, 1, rules.reproduction.maxLitter)
     )
 
-  /** Организм с генами `g`, полным здоровьем, без сытости и жира. */
+  /** Организм с генами `g`, полным здоровьем, без сытости и жира. У корма тело — `forage.health`. */
   private def body(id: Int, g: Genotype, sector: SectorId, pos: Vec2, now: Long, rules: Rules): Organism =
+    // Корм всегда маленький, а его ген здоровья спит до пробуждения.
+    val forage = g.movement.f.family == Family.Constant
+    val size = if forage then rules.forage.health else g.maxHealth
     Organism(
       id = id,
       movement = g.movement,
       attack = AttackOrgan(g.attack, rules.attack.maxReach, rules.attack.costFactor),
       sector = sector,
       pos = pos,
-      health = g.maxHealth,
-      maxHealth = g.maxHealth,
+      health = size,
+      maxHealth = size,
       satiety = 0,
       reserve = 0,
       litterSize = g.litterSize,
-      lastReproductionTick = now
+      lastReproductionTick = now,
+      healthGene = Option.when(forage)(g.maxHealth)
     )
 
   /** Чем итоговые гены отличаются от унаследованных; появившиеся гены — с `before = None`. */

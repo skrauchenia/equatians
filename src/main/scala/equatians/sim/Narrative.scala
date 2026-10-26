@@ -91,7 +91,7 @@ object Narrative:
     val head =
       if k.newSpecies then s"ПРОБУДИЛСЯ из корма #${parent.id}: новый активный организм (${o.family.title}), поколение ${o.generation}"
       else s"отпочковался от корма #${parent.id}, поколение ${o.generation}"
-    head + s": макс. здоровье ${num(o.maxHealth)}, скорость ${num(o.movement.speed)}; " +
+    head + s": ген макс. здоровья ${num(o.sizeGene)}, скорость ${num(o.movement.speed)}; " +
       (if k.mutations.isEmpty then "без мутаций" else s"мутации: ${k.mutations.mkString("; ")}")
 
   def crossed(to: SectorId): String = s"перешёл через проход в сектор (${to.col}, ${to.row})"

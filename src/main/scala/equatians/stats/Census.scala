@@ -5,7 +5,8 @@ import equatians.model.*
 /** Числовой признак организма, который имеет смысл усреднять по популяции. */
 enum Trait(val title: String, val value: (Organism, Rules) => Double):
   case Speed         extends Trait("скорость", (o, _) => o.movement.speed)
-  case MaxHealth     extends Trait("макс. здоровье", (o, _) => o.maxHealth)
+  // Ген размера: у корма — спящий (тело корма всегда маленькое), у остальных совпадает с телом.
+  case MaxHealth     extends Trait("макс. здоровье (ген)", (o, _) => o.sizeGene)
   case Litter        extends Trait("ген помёта", (o, _) => o.litterSize)
   case Generation    extends Trait("поколение", (o, _) => o.generation)
   case Period        extends Trait("период движения", (o, _) => o.movement.period)

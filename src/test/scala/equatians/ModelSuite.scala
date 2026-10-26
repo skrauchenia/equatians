@@ -40,7 +40,7 @@ class ModelSuite extends munit.FunSuite:
   /** Корм в секторе (0, 0) с курсом `heading`. */
   private def forageAt(id: Int, pos: Vec2, heading: Double = 0, r: Rules = rules): Organism =
     val movement = MovementOrgan(Constant(heading), period = 40, span = 3, speed = r.forage.speed)
-    Forage.create(id, SectorId(0, 0), pos, movement, AttackOrgan(Polynomial(Vector(5.0, -6.0)), 15, 0.05), r.forage.health, 0, r)
+    Forage.create(id, SectorId(0, 0), pos, movement, AttackOrgan(Polynomial(Vector(5.0, -6.0)), 15, 0.05), healthGene = 40, 0, r)
 
   /** Двое взрослых сытых организмов одного вида рядом друг с другом. */
   private def couple(satiety: Double = 100, reserve: Double = 40, litter: Int = 1, age: Long = 1000) =
@@ -290,6 +290,17 @@ class ModelSuite extends munit.FunSuite:
     val grown = rules.copy(forage = rules.forage.copy(reproductionRate = 1, awakeningRate = 0, concentration = 5))
     val big = World(WorldConfig(1, 1, 200), grown, cfg.genesis, Vector(forageAt(0, Vec2(100, 100), r = grown)), seed = 1)
     assertEquals(run(big, 300).organisms.size, 20)
+
+  test("forage carries a dormant health gene that the awakened clone expresses"):
+    val p = forageAt(0, Vec2(50, 50), heading = 1.2)
+    assertEquals((p.maxHealth, p.sizeGene), (rules.forage.health, 40.0))
+    val quiet = noMutation
+    val clone = Genetics.bud(100, p, Vec2(51, 50), 0, world(p).copy(rules = quiet), Random(1)).organism
+    assertEquals((clone.maxHealth, clone.sizeGene), (rules.forage.health, 40.0))
+    val awakening = quiet.copy(forage = quiet.forage.copy(awakeningRate = 1))
+    val awake = Genetics.bud(101, p, Vec2(51, 50), 0, world(p).copy(rules = awakening), Random(1)).organism
+    assert(!awake.forage)
+    assertEquals((awake.maxHealth, awake.health, awake.healthGene), (40.0, 40.0, None))
 
   test("forage is passive: crawls straight, never hungers, decides or heals"):
     val f = forageAt(0, Vec2(50, 50), 0)

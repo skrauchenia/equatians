@@ -55,7 +55,7 @@ final case class Genotype(movement: MovementOrgan, attack: MathFunction, maxHeal
   def genes: Vector[(String, GeneValue)] = Genes.from(this)
 
 object Genotype:
-  def of(o: Organism): Genotype = Genotype(o.movement, o.attack.g, o.maxHealth, o.litterSize)
+  def of(o: Organism): Genotype = Genotype(o.movement, o.attack.g, o.sizeGene, o.litterSize)
 
 /** Имена и значения генов организма. Имена совпадают с теми, что генетика пишет в журнал о мутациях. */
 object Genes:

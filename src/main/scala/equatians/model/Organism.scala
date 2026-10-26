@@ -41,6 +41,9 @@ final case class LogEntry(tick: Long, text: String)
   * @param parents   id родителей: двое при скрещивании, один при почковании корма, никого у созданных миром
   * @param lastReproductionTick тик последнего размножения — для перерыва между ними
   * @param offspringCount сколько всего детей родил организм
+  * @param healthGene спящий ген макс. здоровья у корма: тело корма всегда маленькое (`forage.health`),
+  *                   а этот ген наследуется, мутирует и включается, когда клон пробуждается.
+  *                   У активных организмов `None` — их ген и есть `maxHealth`
   */
 final case class Organism(
     id: Int,
@@ -63,13 +66,17 @@ final case class Organism(
     generation: Int = 0,
     parents: Vector[Int] = Vector.empty,
     lastReproductionTick: Long = Long.MinValue / 2,
-    offspringCount: Int = 0
+    offspringCount: Int = 0,
+    healthGene: Option[Double] = None
 ):
   /** Семейство функции органа движения. */
   def family: Family = movement.f.family
 
   /** Тип организма. Пока он определяется только функцией движения; свои своих не атакуют. */
   def species: Family = family
+
+  /** Ген макс. здоровья: у корма — спящий, у остальных совпадает с `maxHealth`. */
+  def sizeGene: Double = healthGene.getOrElse(maxHealth)
 
   /** Корм — организм с функцией движения-константой: ползёт по прямой и служит едой.
     * Не ест, не голодает, не лечится, не убегает и не дерётся; размножается делением.

@@ -15,8 +15,12 @@ import scala.util.Random
   */
 object Forage:
 
-  /** Корм с заданными органами: курс — константа, сытости нет, жир — `forage.reserve` (не больше ёмкости). */
-  def create(id: Int, sector: SectorId, pos: Vec2, movement: MovementOrgan, attack: AttackOrgan, health: Double, tick: Long, rules: Rules): Organism =
+  /** Корм с заданными органами: тело `forage.health`, сытости нет, жир — `forage.reserve` (не больше ёмкости).
+    *
+    * @param healthGene спящий ген макс. здоровья — включится, если потомок этого корма пробудится
+    */
+  def create(id: Int, sector: SectorId, pos: Vec2, movement: MovementOrgan, attack: AttackOrgan, healthGene: Double, tick: Long, rules: Rules): Organism =
+    val health = rules.forage.health
     Organism(
       id = id,
       movement = movement,
@@ -26,11 +30,12 @@ object Forage:
       health = health,
       maxHealth = health,
       satiety = 0,
-      reserve = math.min(rules.forage.reserve, rules.energy.reservePerHealth * health)
+      reserve = math.min(rules.forage.reserve, rules.energy.reservePerHealth * health),
+      healthGene = Some(healthGene)
     ).logged(tick, Narrative.sprouted, rules.logSize)
 
-  /** Корм со случайными генами: курс из [0, 2π), скорость и здоровье из `forage`,
-    * спящие период, span и функция урона — из диапазонов генезиса.
+  /** Корм со случайными генами: курс из [0, 2π), скорость из `forage`,
+    * спящие период, span, функция урона и здоровье — из диапазонов генезиса.
     */
   def random(id: Int, sector: SectorId, pos: Vec2, rules: Rules, genesis: GenesisConfig, rnd: Random, tick: Long): Organism =
     val g = genesis.movement
@@ -41,7 +46,7 @@ object Forage:
       speed = rules.forage.speed
     )
     val attack = Genesis.randomAttack(genesis.attack, rules.attack, rnd)
-    create(id, sector, pos, movement, attack, rules.forage.health, tick, rules)
+    create(id, sector, pos, movement, attack, genesis.health.sample(rnd), tick, rules)
 
   /** Корм, появившийся сам по себе: в каждом секторе с вероятностью `spawn-rate`, если там меньше предела.
     * Случайность детерминирована сидом и тиком; id выдаются начиная с `firstId`.
