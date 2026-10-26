@@ -9,16 +9,17 @@ import scala.util.Random
   *
   * Порядок фаз:
   *  1. решение — каждый организм, видя снимок мира на начало тика, выбирает поведение;
-  *     падаль в поле зрения проверяется каждый тик и важнее охоты и обычного движения;
+  *     падаль, а за ней корм в поле зрения проверяются каждый тик и важнее охоты на чужаков и обычного движения;
+  *     кормовые организмы ничего не решают — только ползут;
   *     готовый к размножению сначала ищет готового партнёра своего вида, потом смотрит на чужаков;
   *  2. движение — обычное (по функции), к цели, к падали, к партнёру или от угрозы;
   *  3. метаболизм — оплата шага сытостью, затем жиром, затем здоровьем; потом отхил;
   *  4. удары — все преследователи, у которых цель в зоне удара, бьют одновременно;
   *  5. реакция — раненые решают, отвечать ли нападающему или бежать;
-  *  6. еда — дошедшие до падали или растения едят, ближние первыми;
+  *  6. падаль — дошедшие до трупа едят, ближние первыми;
   *  7. смерть — убитого ест нанёсший наибольший урон, остаток еды остаётся трупом;
   *  8. размножение — дошедшие друг до друга готовые партнёры рождают помёт;
-  *  9. рост — в секторах появляются новые растения.
+  *  9. корм — почкуется (иногда пробуждаясь в активный организм) и изредка появляется сам.
   */
 object Simulation:
 
@@ -36,8 +37,10 @@ object Simulation:
     val bySector: Map[SectorId, Vector[Organism]] = world.organisms.groupBy(_.sector)
     val corpseById: Map[Int, Corpse] = world.corpses.iterator.map(c => c.id -> c).toMap
     val corpsesBySector: Map[SectorId, Vector[Corpse]] = world.corpses.groupBy(_.sector)
-    val plantById: Map[Int, Plant] = world.plants.iterator.map(p => p.id -> p).toMap
-    val plantsBySector: Map[SectorId, Vector[Plant]] = world.plants.groupBy(_.sector)
+    val forageBySector: Map[SectorId, Vector[Organism]] = world.organisms.filter(_.forage).groupBy(_.sector)
+
+    /** Является ли организм `id` кормом. */
+    def isForage(id: Int): Boolean = byId.get(id).exists(_.forage)
 
     /** Запись в журнал организма с текущим тиком. */
     def note(o: Organism, text: String): Organism = o.logged(now, text, rules.logSize)
@@ -52,20 +55,24 @@ object Simulation:
     val movedById = moved.iterator.map(o => o.id -> o).toMap
     val strikes = moved.flatMap(strikeOf(_, movedById, ctx))
     val afterFight = react(strikes, applyStrikes(strikes, movedById, ctx), ctx)
-    val (fed, corpsesLeft, plantsLeft) = eatFood(afterFight, ctx)
+    val (fed, corpsesLeft) = scavenge(afterFight, ctx)
     val (resolved, newCorpses) = resolveDeaths(strikes, fed, ctx)
     val (alive, dead) = world.organisms.map(o => resolved(o.id)).partition(_.alive)
     val (parents, newborns) = reproduce(alive, ctx)
-    val plants = growPlants(plantsLeft, ctx)
+    val (budders, budOffspring) = Forage.bud(parents, world.nextId + newborns.size, world)
+    val buds = budOffspring.map(k => ctx.note(k.organism, Narrative.budded(k, ctx.byId.getOrElse(k.organism.parents.head, k.organism))))
+    val grown = budders ++ newborns ++ buds
+    val sprouts = Forage.spawn(grown, world.nextId + newborns.size + buds.size, world)
     world.copy(
-      organisms = parents ++ newborns,
+      organisms = grown ++ sprouts,
       tick = world.tick + 1,
-      graveyard = (world.graveyard ++ dead).takeRight(world.rules.graveyardSize),
+      graveyard = (world.graveyard ++ dead.filterNot(_.forage)).takeRight(world.rules.graveyardSize),
       corpses = corpsesLeft ++ newCorpses,
-      plants = plants,
-      nextPlantId = world.nextPlantId + plants.size - plantsLeft.size,
-      nextId = world.nextId + newborns.size,
-      births = world.births + newborns.size
+      nextId = world.nextId + newborns.size + buds.size + sprouts.size,
+      births = world.births + newborns.size,
+      forageSpawned = world.forageSpawned + sprouts.size,
+      buds = world.buds + buds.size,
+      awakenings = world.awakenings + budOffspring.count(_.newSpecies)
     )
 
   /** Вероятность того, что организм выберет охоту: 0 на пороге голода, растёт линейно к нулевой сытости. */
@@ -92,7 +99,7 @@ object Simulation:
     ctx.bySector
       .getOrElse(o.sector, Vector.empty)
       .iterator
-      .filter(n => n.id != o.id && n.species != o.species)
+      .filter(n => n.id != o.id && !n.forage && n.species != o.species)
       .map(n => n -> o.distanceTo(n))
       .filter(_._2 <= ctx.rules.perceptionRadius)
       .minByOption(_._2)
@@ -102,17 +109,17 @@ object Simulation:
     ctx.bySector
       .getOrElse(o.sector, Vector.empty)
       .iterator
-      .filter(n => n.id != o.id && n.species == o.species && n.readyToMate(ctx.now, ctx.rules))
+      .filter(n => n.id != o.id && !n.forage && n.species == o.species && n.readyToMate(ctx.now, ctx.rules))
       .map(n => n -> o.distanceTo(n))
       .filter(_._2 <= ctx.rules.perceptionRadius)
       .minByOption(_._2)
 
-  /** Ближайший источник еды (труп или растение) в своём секторе в радиусе восприятия. */
-  private def nearestFood[F <: FoodSource](o: Organism, bySector: Map[SectorId, Vector[F]], ctx: Context): Option[(F, Double)] =
+  /** Ближайший к организму объект (труп или корм) своего сектора в радиусе восприятия. */
+  private def nearest[A](o: Organism, bySector: Map[SectorId, Vector[A]], pos: A => Vec2, ctx: Context): Option[(A, Double)] =
     bySector
       .getOrElse(o.sector, Vector.empty)
       .iterator
-      .map(c => c -> (c.pos - o.pos).length)
+      .map(c => c -> (pos(c) - o.pos).length)
       .filter(_._2 <= ctx.rules.perceptionRadius)
       .minByOption(_._2)
 
@@ -120,6 +127,9 @@ object Simulation:
     * раз в `decision-interval` тиков — поискать пару, а если не вышло, бросить кубик относительно чужака.
     */
   private def decide(o: Organism, ctx: Context): Organism =
+    if o.forage then o else decideActive(o, ctx)
+
+  private def decideActive(o: Organism, ctx: Context): Organism =
     val r = ctx.rules
     def within(id: Int, radius: Double) =
       ctx.byId.get(id).filter(x => x.sector == o.sector && o.distanceTo(x) <= radius)
@@ -132,35 +142,37 @@ object Simulation:
         ctx.note(o.copy(behaviour = Cruise), Narrative.escaped(f))
       case Scavenge(c) if !ctx.corpseById.contains(c) =>
         ctx.note(o.copy(behaviour = Cruise), Narrative.carrionGone(c))
-      case Graze(p) if !ctx.plantById.contains(p) =>
-        ctx.note(o.copy(behaviour = Cruise), Narrative.plantGone(p))
       case Mate(p) if within(p, r.perceptionRadius * r.behaviour.loseTargetFactor).isEmpty =>
         ctx.note(o.copy(behaviour = Cruise), Narrative.mateLost(p))
       case Mate(p) if !o.readyToMate(ctx.now, r) =>
         ctx.note(o.copy(behaviour = Cruise), Narrative.mateGaveUp(p))
       case _ => o
 
-    // Падаль важнее растений, растения — важнее охоты и обычного движения. Идущий к растению отвлечётся на падаль.
+    // Падаль важнее корма, корм — важнее охоты на чужаков и обычного движения.
     val sat = kept.satietyFraction(r)
+    val huntingForage = kept.behaviour match
+      case Chase(t) => ctx.isForage(t)
+      case _        => false
     val carrion = kept.behaviour match
-      case Cruise | Chase(_) | Graze(_) if sat < r.scavenging.satietyThreshold =>
-        nearestFood(kept, ctx.corpsesBySector, ctx).filter(_ => ctx.roll(kept, 3) < r.scavenging.probability)
+      case Cruise | Chase(_) if sat < r.scavenging.satietyThreshold =>
+        nearest(kept, ctx.corpsesBySector, _.pos, ctx).filter(_ => ctx.roll(kept, 3) < r.scavenging.probability)
       case _ => None
-    val plant = kept.behaviour match
-      case Cruise | Chase(_) if carrion.isEmpty && sat < r.plants.satietyThreshold =>
-        nearestFood(kept, ctx.plantsBySector, ctx).filter(_ => ctx.roll(kept, 6) < r.plants.probability)
+    val forage = kept.behaviour match
+      case Cruise | Chase(_) if carrion.isEmpty && !huntingForage && sat < r.forage.satietyThreshold =>
+        nearest(kept, ctx.forageBySector, _.pos, ctx).filter(_ => ctx.roll(kept, 6) < r.forage.probability)
       case _ => None
 
-    (carrion, plant) match
+    (carrion, forage) match
       case (Some((c, dist)), _) => ctx.note(kept.copy(behaviour = Scavenge(c.id)), Narrative.spotCarrion(c, dist, r, kept))
-      case (_, Some((p, dist))) => ctx.note(kept.copy(behaviour = Graze(p.id)), Narrative.spotPlant(p, dist, r, kept))
-      case _ => decideSocial(o, kept, ctx)
+      case (_, Some((f, dist))) => ctx.note(kept.copy(behaviour = Chase(f.id)), Narrative.spotForage(f, dist, r, kept))
+      case _ if huntingForage   => kept
+      case _                    => decideSocial(o, kept, ctx)
 
   /** Решения о партнёре и чужаках — раз в `decision-interval` тиков, если организм не занят едой или парой. */
   private def decideSocial(o: Organism, kept: Organism, ctx: Context): Organism =
     val r = ctx.rules
     kept.behaviour match
-      case Scavenge(_) | Graze(_) | Mate(_) => kept
+      case Scavenge(_) | Mate(_) => kept
       case _ if o.age % r.behaviour.decisionInterval != 0 => kept
       case _ =>
         val partner =
@@ -203,7 +215,6 @@ object Simulation:
       case Cruise      => o.cruiseDisplacement
       case Chase(t)    => ctx.byId.get(t).fold(Vec2.Zero)(target => approach(o, target.pos, o.attack.range * 0.5))
       case Scavenge(c) => ctx.corpseById.get(c).fold(Vec2.Zero)(corpse => approach(o, corpse.pos, 0))
-      case Graze(p)    => ctx.plantById.get(p).fold(Vec2.Zero)(plant => approach(o, plant.pos, 0))
       case Mate(p) =>
         ctx.byId.get(p).fold(Vec2.Zero)(partner => approach(o, partner.pos, o.radius(ctx.rules) + partner.radius(ctx.rules)))
       case Flee(f) =>
@@ -237,6 +248,9 @@ object Simulation:
 
   /** Фаза 3: оплатить расход (неоплаченное бьёт по здоровью), затем подлечиться на остаток энергии. */
   private def metabolise(o: Organism, ctx: Context): Organism =
+    if o.forage then o else metaboliseActive(o, ctx)
+
+  private def metaboliseActive(o: Organism, ctx: Context): Organism =
     val r = ctx.rules
     val (paid, unpaid) = o.pay(metabolicCost(o, r), r)
     val after = if unpaid > 0 then paid.copy(health = paid.health - unpaid * r.energy.starvationDamage) else paid
@@ -288,7 +302,7 @@ object Simulation:
     strikes.groupBy(_.target).toVector.sortBy(_._1).foldLeft(m) { case (acc, (targetId, hits)) =>
       val t = acc(targetId)
       val attacker = hits.maxBy(_.damage).attacker
-      if !t.alive || t.behaviour == Chase(attacker) || t.behaviour == Flee(attacker) then acc
+      if !t.alive || t.forage || t.behaviour == Chase(attacker) || t.behaviour == Flee(attacker) then acc
       else
         val fight = ctx.roll(t, 2) < chaseProbability(t, ctx.rules)
         val next = if fight then Chase(attacker) else Flee(attacker)
@@ -296,73 +310,34 @@ object Simulation:
         acc.updated(targetId, ctx.note(t.copy(behaviour = next), text))
     }
 
-  /** Фаза 6: живые организмы, дошедшие до своей еды (падали или растения), едят — ближние первыми.
+  /** Фаза 6: живые организмы, дошедшие до своей падали, едят её — ближние первыми.
     *
-    * @param target  id источника, к которому идёт организм, если он идёт есть именно такой еды
-    * @param reduce  тот же источник с новым остатком еды
-    * @param describe запись в журнал о съеденном
-    * @return организмы после еды и оставшиеся источники (в исходном порядке)
+    * @return организмы после еды и оставшиеся трупы (в исходном порядке)
     */
-  private def feed[F <: FoodSource](
-      m: Map[Int, Organism],
-      sources: Vector[F],
-      target: Behaviour => Option[Int],
-      reduce: (F, Double) => F,
-      describe: (F, Meal) => String,
-      ctx: Context
-  ): (Map[Int, Organism], Vector[F]) =
+  private def scavenge(m: Map[Int, Organism], ctx: Context): (Map[Int, Organism], Vector[Corpse]) =
     val r = ctx.rules
-    val byId = sources.iterator.map(f => f.id -> f).toMap
     val eaters = m.valuesIterator
       .filter(_.alive)
-      .flatMap(o => target(o.behaviour).flatMap(id => byId.get(id).map(f => (o.id, id, (f.pos - o.pos).length))))
+      .flatMap { o =>
+        o.behaviour match
+          case Scavenge(c) => ctx.corpseById.get(c).map(corpse => (o.id, c, (corpse.pos - o.pos).length))
+          case _           => None
+      }
       .filter((id, _, dist) => dist <= m(id).radius(r) + r.scavenging.eatReach)
       .toVector
       .sortBy((id, _, dist) => (dist, id))
-    val (fed, left) = eaters.foldLeft((m, byId)) { case ((orgs, fs), (id, f, _)) =>
-      fs.get(f) match
-        case None => (orgs, fs)
-        case Some(source) =>
-          val meal = orgs(id).eat(source.food, r)
-          val rest = source.food - meal.eaten
-          val o = ctx.note(meal.organism.copy(behaviour = Cruise), describe(source, meal))
-          (orgs.updated(id, o), if rest > CorpseMinReserve then fs.updated(f, reduce(source, rest)) else fs - f)
-    }
-    (fed, sources.flatMap(f => left.get(f.id)))
-
-  /** Падаль и растения едятся по одним правилам. */
-  private def eatFood(m: Map[Int, Organism], ctx: Context): (Map[Int, Organism], Vector[Corpse], Vector[Plant]) =
-    val (afterCarrion, corpses) = feed[Corpse](
-      m, ctx.world.corpses,
-      { case Scavenge(c) => Some(c); case _ => None },
-      (c, food) => c.copy(food = food),
-      Narrative.ateCarrion,
-      ctx
-    )
-    val (afterPlants, plants) = feed[Plant](
-      afterCarrion, ctx.world.plants,
-      { case Graze(p) => Some(p); case _ => None },
-      (p, food) => p.copy(food = food),
-      Narrative.atePlant,
-      ctx
-    )
-    (afterPlants, corpses, plants)
-
-  /** Фаза 9: в каждом секторе с вероятностью `spawn-rate` вырастает растение, если их там меньше предела. */
-  private def growPlants(plants: Vector[Plant], ctx: Context): Vector[Plant] =
-    val p = ctx.rules.plants
-    val size = ctx.world.config.sectorSize
-    val counts = plants.groupMapReduce(_.sector)(_ => 1)(_ + _)
-    val sprouts = ctx.world.config.sectors.zipWithIndex.flatMap { (sector, i) =>
-      val salt = -(i + 1)
-      def roll(k: Int) = Rng.uniform(ctx.world.seed, ctx.now, salt, k)
-      Option.when(counts.getOrElse(sector, 0) < p.maxPerSector && roll(7) < p.spawnRate)(
-        (sector, Vec2(roll(8) * size, roll(9) * size))
-      )
-    }
-    plants ++ sprouts.zipWithIndex.map { case ((sector, pos), i) =>
-      Plant(ctx.world.nextPlantId + i, sector, pos, p.food)
-    }
+    if eaters.isEmpty then (m, ctx.world.corpses)
+    else
+      val (fed, left) = eaters.foldLeft((m, ctx.corpseById)) { case ((orgs, cs), (id, c, _)) =>
+        cs.get(c) match
+          case None => (orgs, cs)
+          case Some(corpse) =>
+            val meal = orgs(id).eat(corpse.food, r)
+            val rest = corpse.food - meal.eaten
+            val o = ctx.note(meal.organism.copy(behaviour = Cruise), Narrative.ateCarrion(corpse, meal))
+            (orgs.updated(id, o), if rest > CorpseMinReserve then cs.updated(c, corpse.copy(food = rest)) else cs - c)
+      }
+      (fed, ctx.world.corpses.flatMap(c => left.get(c.id)))
 
   /** Фаза 7: погибшего от ударов ест тот, кто нанёс наибольший урон (если сам жив).
     * Еда — мясо тела плюс оставшийся жир; несъеденное остаётся трупом, который может доесть кто угодно.

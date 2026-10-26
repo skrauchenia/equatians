@@ -8,7 +8,7 @@ import scala.util.Random
 /** Начальное заселение мира случайными организмами. */
 object Genesis:
 
-  /** Создаёт мир с `count` организмами в случайных секторах и точках.
+  /** Создаёт мир с `count` организмами в случайных секторах и точках, плюс начальный корм в каждом секторе.
     * Результат детерминирован: одинаковые параметры и `seed` дают одинаковый мир.
     */
   def randomWorld(world: WorldConfig, rules: Rules, genesis: GenesisConfig, count: Int, seed: Long): World =
@@ -31,15 +31,18 @@ object Genesis:
       )
       o.logged(0, Narrative.born(o, rules), rules.logSize)
     }
-    val plants = for
+    val forage = for
       sector <- world.sectors.toVector
-      _ <- 0 until rules.plants.initialPerSector
-    yield (sector, Vec2(rnd.nextDouble() * world.sectorSize, rnd.nextDouble() * world.sectorSize))
+      _ <- 0 until rules.forage.initialPerSector
+    yield sector
+    val forageOrganisms = forage.zipWithIndex.map { (s, i) =>
+      val pos = Vec2(rnd.nextDouble() * world.sectorSize, rnd.nextDouble() * world.sectorSize)
+      Forage.random(count + i, s, pos, rules, genesis, rnd, 0)
+    }
     World(
-      world, rules, genesis, organisms, seed,
-      plants = plants.zipWithIndex.map { case ((s, p), i) => Plant(i, s, p, rules.plants.food) },
-      nextPlantId = plants.size,
-      nextId = count
+      world, rules, genesis, organisms ++ forageOrganisms, seed,
+      nextId = count + forageOrganisms.size,
+      forageSpawned = forageOrganisms.size
     )
 
   /** Случайный орган движения: семейство из `genesis.families`, гены из настроенных диапазонов. */
@@ -67,6 +70,7 @@ object Genesis:
   def randomFunction(family: Family, ranges: FunctionRanges, rnd: Random): MathFunction =
     def polynomial(rs: Vector[GeneRange]) = Polynomial(rs.map(_.sample(rnd)))
     family match
+      case Family.Constant    => Constant(ranges.constant.sample(rnd))
       case Family.Linear      => polynomial(ranges.linear)
       case Family.Quadratic   => polynomial(ranges.quadratic)
       case Family.Cubic       => polynomial(ranges.cubic)

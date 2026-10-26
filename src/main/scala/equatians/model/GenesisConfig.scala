@@ -14,6 +14,7 @@ final case class GeneRange(min: Double, max: Double):
   * Для полиномов — диапазоны a0..an по возрастанию степени.
   */
 final case class FunctionRanges(
+    constant: GeneRange,
     linear: Vector[GeneRange],
     quadratic: Vector[GeneRange],
     cubic: Vector[GeneRange],

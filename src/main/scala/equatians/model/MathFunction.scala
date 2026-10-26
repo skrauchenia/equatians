@@ -4,6 +4,7 @@ import scala.math.BigDecimal.RoundingMode
 
 /** Семейство функции. Пока что именно семейство определяет «вид» организма. */
 enum Family(val title: String):
+  case Constant    extends Family("константная")
   case Linear      extends Family("линейная")
   case Quadratic   extends Family("квадратичная")
   case Cubic       extends Family("кубическая")
@@ -23,6 +24,12 @@ sealed trait MathFunction:
   def latex: String
 
 object MathFunction:
+
+  /** Константа c — например, курс корма, который ползёт по прямой. */
+  final case class Constant(c: Double) extends MathFunction:
+    def apply(x: Double): Double = c
+    def family: Family = Family.Constant
+    def latex: String = Latex.number(c)
 
   /** a0 + a1·x + a2·x² + ...; коэффициенты по возрастанию степени. */
   final case class Polynomial(coeffs: Vector[Double]) extends MathFunction:

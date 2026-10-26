@@ -23,10 +23,11 @@ final case class WorldConfig(cols: Int, rows: Int, sectorSize: Double):
   * @param graveyard последние погибшие организмы — чтобы можно было посмотреть их журнал
   * @param genesis   диапазоны генов генезиса — нужны мутации, меняющей семейство функции
   * @param corpses   трупы с недоеденной едой
-  * @param plants    растения
-  * @param nextPlantId id для следующего растения
-  * @param nextId    id для следующего родившегося организма
-  * @param births    сколько организмов родилось с начала мира
+  * @param nextId    id для следующего организма (родившегося или кормового)
+  * @param births    сколько организмов родилось с начала мира (без корма)
+  * @param forageSpawned сколько корма появилось в мире само по себе (включая генезис)
+  * @param buds      сколько корма отпочковалось (включая пробудившихся)
+  * @param awakenings сколько клонов корма пробудилось в активные организмы
   */
 final case class World(
     config: WorldConfig,
@@ -37,10 +38,11 @@ final case class World(
     tick: Long = 0,
     graveyard: Vector[Organism] = Vector.empty,
     corpses: Vector[Corpse] = Vector.empty,
-    plants: Vector[Plant] = Vector.empty,
-    nextPlantId: Int = 0,
     nextId: Int = 0,
-    births: Long = 0
+    births: Long = 0,
+    forageSpawned: Long = 0,
+    buds: Long = 0,
+    awakenings: Long = 0
 ):
   /** Организмы, находящиеся в секторе `sector`. */
   def organismsIn(sector: SectorId): Vector[Organism] = organisms.filter(_.sector == sector)

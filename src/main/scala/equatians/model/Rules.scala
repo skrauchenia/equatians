@@ -21,24 +21,33 @@ final case class EnergyRules(
 /** Восстановление здоровья: `rate` единиц за тик по цене `cost` сытости за единицу. */
 final case class HealingRules(rate: Double, cost: Double)
 
-/** Растения — возобновляемая еда.
+/** Корм — организмы с функцией движения-константой: размножаются делением и иногда «пробуждаются».
   *
-  * @param spawnRate        вероятность за тик, что в секторе вырастет растение
-  * @param maxPerSector     предел числа растений в секторе
-  * @param initialPerSector сколько растений в секторе при генезисе
-  * @param food             еда в одном растении, в единицах жира
-  * @param satietyThreshold растения интересны, пока доля сытости ниже порога
-  * @param probability      вероятность за тик пойти к замеченному растению
+  * @param reproductionRate вероятность почкования за тик при пустом секторе; падает линейно до 0 к max-per-sector
+  * @param awakeningRate    вероятность, что у отпочковавшегося клона функция движения сменит семейство
+  * @param spawnRate        вероятность за тик, что в секторе корм появится сам по себе
+  * @param maxPerSector     предел числа кормовых организмов в секторе
+  * @param initialPerSector сколько корма в секторе при генезисе
+  * @param speed            шаг за тик
+  * @param health           здоровье (оно же максимальное)
+  * @param reserve          жир; вместе с мясом тела — это еда, которую он даёт
+  * @param satietyThreshold на корм охотятся, пока доля сытости ниже порога
+  * @param probability      вероятность за тик пойти за замеченным кормом
   */
-final case class PlantRules(
+final case class ForageRules(
+    reproductionRate: Double,
+    awakeningRate: Double,
     spawnRate: Double,
     maxPerSector: Int,
     initialPerSector: Int,
-    food: Double,
+    speed: Double,
+    health: Double,
+    reserve: Double,
     satietyThreshold: Double,
     probability: Double
 ):
-  require(spawnRate >= 0 && spawnRate <= 1, "plants.spawn-rate должен быть в [0, 1]")
+  require(spawnRate >= 0 && spawnRate <= 1, "forage.spawn-rate должен быть в [0, 1]")
+  require(health > 0, "forage.health должен быть > 0")
 
 /** Поедание падали.
   *
@@ -116,13 +125,18 @@ final case class Rules(
     meatPerHealth: Double,
     energy: EnergyRules,
     healing: HealingRules,
-    plants: PlantRules,
+    forage: ForageRules,
     scavenging: ScavengeRules,
     reproduction: ReproductionRules,
     mutation: MutationRules,
     behaviour: BehaviourRules,
     attack: AttackRules
 ):
+  require(
+    scavenging.satietyThreshold >= forage.satietyThreshold,
+    s"scavenging.satiety-threshold (${scavenging.satietyThreshold}) должен быть не ниже " +
+      s"forage.satiety-threshold (${forage.satietyThreshold}): падаль бесплатна и должна быть приоритетнее охоты на корм"
+  )
   require(
     reproduction.bodyCostPerHealth >= meatPerHealth * energy.reserveDensity,
     s"reproduction.body-cost-per-health (${reproduction.bodyCostPerHealth}) должен быть не меньше " +

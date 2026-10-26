@@ -132,18 +132,24 @@ final class SimulatorApp(config: AppConfig):
     speedLabel.setText(s"Скорость: ×$ticksPerFrame тиков/кадр")
     pauseButton.setText(if running then "Пауза (Space)" else "Пуск (Space)")
     val counts = world.organisms.groupMapReduce(_.family)(_ => 1)(_ + _)
-    legendLabels.foreach((f, l) => l.setText(s"${f.title}: ${counts.getOrElse(f, 0)}"))
-    val deaths = config.population.count + world.births - world.organisms.size
-    val maxGeneration = world.organisms.map(_.generation).maxOption.getOrElse(0)
+    legendLabels.foreach { (f, l) =>
+      val name = if f == Family.Constant then s"корм (${f.title})" else f.title
+      l.setText(s"$name: ${counts.getOrElse(f, 0)}")
+    }
+    val (forage, active) = world.organisms.partition(_.forage)
+    val deaths = config.population.count + world.births + world.awakenings - active.size
+    val maxGeneration = active.map(_.generation).maxOption.getOrElse(0)
     deathsLabel.setText(
-      s"<html>Живых: ${world.organisms.size}, рождений: ${world.births}, погибло: $deaths<br>" +
-        s"Макс. поколение: $maxGeneration, растений: ${world.plants.size}, падаль: ${world.corpses.size}</html>"
+      s"<html>Живых: ${active.size}, рождений: ${world.births}, погибло: $deaths<br>" +
+        s"Макс. поколение: $maxGeneration, падаль: ${world.corpses.size}<br>" +
+        s"Корм: ${forage.size}, отпочковалось ${world.buds}, пробудилось ${world.awakenings}</html>"
     )
     refreshInfo()
 
   /** Текущее занятие организма для заголовка карточки. */
   private def activity(o: Organism): String =
-    if !o.alive then "погиб"
+    if !o.alive then if o.forage then "съеден" else "погиб"
+    else if o.forage then "корм: ползёт по прямой, почкуется"
     else
       o.behaviour match
         case Behaviour.Cruise   => "обычное движение"
@@ -151,7 +157,6 @@ final class SimulatorApp(config: AppConfig):
         case Behaviour.Flee(f)  => s"отдаляется от #$f"
         case Behaviour.Scavenge(c) => s"идёт к падали #$c"
         case Behaviour.Mate(p)     => s"идёт к партнёру #$p"
-        case Behaviour.Graze(_)    => "идёт к растению"
 
   /** Карточка выбранного организма: формулы рендерятся при смене выбора, остальное — каждый кадр. */
   private def refreshInfo(): Unit =
@@ -186,7 +191,10 @@ final class SimulatorApp(config: AppConfig):
           s"жир ${Narrative.num(o.reserve)} / ${Narrative.num(o.maxReserve(rules))}  (×${Narrative.num(e.reserveDensity)} к сытости)"
         )
         val m = o.movement
-        val origin = o.parents.fold("создан генезисом")((a, b) => s"родители #$a × #$b")
+        val origin = o.parents match
+          case Vector()     => "создан миром"
+          case Vector(p)    => s"отпочковался от #$p"
+          case ps           => s"родители ${ps.map(id => s"#$id").mkString(" × ")}"
         val ready = if o.readyToMate(world.tick, rules) then "готов к размножению" else "не готов к размножению"
         infoState.setText(
           s"<html>поколение ${o.generation}, $origin<br>" +

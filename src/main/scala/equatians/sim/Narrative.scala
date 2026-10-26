@@ -78,13 +78,21 @@ object Narrative:
       (if k.mutations.isEmpty then "без мутаций" else s"мутации: ${k.mutations.mkString("; ")}") +
       (if k.newSpecies then s" — НОВЫЙ ВИД (${o.family.title})" else "")
 
-  def spotPlant(p: Plant, dist: Double, rules: Rules, o: Organism): String =
-    s"заметил растение (еды ${num(p.food)}) в ${num(dist)} — идёт есть; ${vitals(o, rules)}"
+  def spotForage(f: Organism, dist: Double, rules: Rules, o: Organism): String =
+    s"заметил корм #${f.id} в ${num(dist)} — охотится; ${vitals(o, rules)}"
 
-  def plantGone(p: Int): String = "растение кто-то съел, обычное движение"
+  def sprouted: String = "появился как корм"
 
-  def atePlant(p: Plant, meal: Meal): String =
-    s"съел растение: ${num(meal.eaten)} еды → +${num(meal.toSatiety)} сытости, +${num(meal.toReserve)} жира"
+  def buddedOff(k: Genetics.Offspring): String =
+    s"отпочковал #${k.organism.id}" + (if k.newSpecies then s" — тот пробудился (${k.organism.family.title})" else "")
+
+  def budded(k: Genetics.Offspring, parent: Organism): String =
+    val o = k.organism
+    val head =
+      if k.newSpecies then s"ПРОБУДИЛСЯ из корма #${parent.id}: новый активный организм (${o.family.title}), поколение ${o.generation}"
+      else s"отпочковался от корма #${parent.id}, поколение ${o.generation}"
+    head + s": макс. здоровье ${num(o.maxHealth)}, скорость ${num(o.movement.speed)}; " +
+      (if k.mutations.isEmpty then "без мутаций" else s"мутации: ${k.mutations.mkString("; ")}")
 
   def fullyHealed: String = "здоровье полностью восстановлено"
 

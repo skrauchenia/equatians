@@ -12,15 +12,6 @@ enum Behaviour:
   case Scavenge(corpse: Int)
   /** Идёт к партнёру своего вида, чтобы размножиться. */
   case Mate(partner: Int)
-  /** Идёт есть растение `plant`. */
-  case Graze(plant: Int)
-
-/** Неподвижный источник еды: падаль или растение. Еда — в единицах жира. */
-sealed trait FoodSource:
-  def id: Int
-  def sector: SectorId
-  def pos: Vec2
-  def food: Double
 
 /** Труп, который может доесть любой организм.
   *
@@ -28,10 +19,6 @@ sealed trait FoodSource:
   * @param food сколько еды осталось, в единицах жира (мясо тела плюс несъеденный жир)
   */
 final case class Corpse(id: Int, species: Family, sector: SectorId, pos: Vec2, food: Double, diedAt: Long)
-    extends FoodSource
-
-/** Растение — возобновляемая еда; появляется в секторах само. Id растений — своя нумерация. */
-final case class Plant(id: Int, sector: SectorId, pos: Vec2, food: Double) extends FoodSource
 
 /** Запись в журнале организма. */
 final case class LogEntry(tick: Long, text: String)
@@ -51,7 +38,7 @@ final case class LogEntry(tick: Long, text: String)
   * @param lastStep  фактический шаг на прошлом тике — для отрисовки курса и расчёта расхода
   * @param litterSize ген: желаемое число детей за одно размножение
   * @param generation поколение: 0 у созданных генезисом, у потомка — максимум родителей плюс один
-  * @param parents   id родителей, если организм родился, а не создан генезисом
+  * @param parents   id родителей: двое при скрещивании, один при почковании корма, никого у созданных миром
   * @param lastReproductionTick тик последнего размножения — для перерыва между ними
   * @param offspringCount сколько всего детей родил организм
   */
@@ -74,7 +61,7 @@ final case class Organism(
     log: Vector[LogEntry] = Vector.empty,
     litterSize: Int = 1,
     generation: Int = 0,
-    parents: Option[(Int, Int)] = None,
+    parents: Vector[Int] = Vector.empty,
     lastReproductionTick: Long = Long.MinValue / 2,
     offspringCount: Int = 0
 ):
@@ -83,6 +70,11 @@ final case class Organism(
 
   /** Тип организма. Пока он определяется только функцией движения; свои своих не атакуют. */
   def species: Family = family
+
+  /** Корм — организм с функцией движения-константой: ползёт по прямой и служит едой.
+    * Не ест, не голодает, не лечится, не убегает и не дерётся; размножается делением.
+    */
+  def forage: Boolean = species == Family.Constant
 
   /** Жив ли организм. */
   def alive: Boolean = health > 0
@@ -118,7 +110,7 @@ final case class Organism(
   /** Готов ли к размножению на тике `now`: взрослый, перерыв прошёл, сытость, жир и здоровье выше порогов. */
   def readyToMate(now: Long, rules: Rules): Boolean =
     val r = rules.reproduction
-    alive && age >= r.maturityAge && now - lastReproductionTick >= r.cooldown &&
+    alive && !forage && age >= r.maturityAge && now - lastReproductionTick >= r.cooldown &&
       satietyFraction(rules) >= r.satietyThreshold && reserveFraction(rules) >= r.reserveThreshold &&
       health / maxHealth >= r.healthThreshold
 

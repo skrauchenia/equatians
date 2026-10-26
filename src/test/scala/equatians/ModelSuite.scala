@@ -2,15 +2,15 @@ package equatians
 
 import equatians.model.*
 import equatians.model.MathFunction.*
-import equatians.sim.{Genesis, Genetics, Simulation}
+import equatians.sim.{Forage, Genesis, Genetics, Simulation}
 
 import scala.util.Random
 
 class ModelSuite extends munit.FunSuite:
 
   private val cfg = AppConfig.load()
-  /** Правила без роста растений, чтобы сценарии не зависели от случайной еды. */
-  private val rules = cfg.rules.copy(plants = cfg.rules.plants.copy(spawnRate = 0))
+  /** Правила без появления и почкования корма, чтобы сценарии не зависели от случайной еды. */
+  private val rules = cfg.rules.copy(forage = cfg.rules.forage.copy(spawnRate = 0, reproductionRate = 0))
 
   /** Организм в секторе (0, 0) с прямолинейным движением на восток и сильным ударом в упор. */
   private def organism(
@@ -34,6 +34,11 @@ class ModelSuite extends munit.FunSuite:
     World(WorldConfig(1, 1, 100), rules, cfg.genesis, os.toVector, seed = 1, nextId = 100)
 
   private val noMutation = rules.copy(mutation = rules.mutation.copy(rate = 0, familyRate = 0))
+
+  /** Корм в секторе (0, 0) с курсом `heading`. */
+  private def forageAt(id: Int, pos: Vec2, heading: Double = 0, r: Rules = rules): Organism =
+    val movement = MovementOrgan(Constant(heading), period = 40, span = 3, speed = r.forage.speed)
+    Forage.create(id, SectorId(0, 0), pos, movement, AttackOrgan(Polynomial(Vector(5.0, -6.0)), 15, 0.05), r.forage.health, 0, r)
 
   /** Двое взрослых сытых организмов одного вида рядом друг с другом. */
   private def couple(satiety: Double = 100, reserve: Double = 40, litter: Int = 1, age: Long = 1000) =
@@ -171,7 +176,8 @@ class ModelSuite extends munit.FunSuite:
 
   test("genesis spawns organisms with full health and satiety"):
     val w = Genesis.randomWorld(WorldConfig(3, 2, 100), rules, cfg.genesis, count = 50, seed = 3)
-    w.organisms.foreach { o =>
+    assertEquals(w.organisms.count(_.forage), 6 * cfg.rules.forage.initialPerSector)
+    w.organisms.filterNot(_.forage).foreach { o =>
       assertEqualsDouble(o.health, o.maxHealth, 1e-9)
       assertEqualsDouble(o.satiety, rules.energy.maxSatiety, 1e-9)
       assert(o.reserve <= o.maxReserve(rules))
@@ -203,7 +209,7 @@ class ModelSuite extends munit.FunSuite:
       cs.zipWithIndex.foreach((c, i) => assert(c == (i + 1) || c == -(i + 1), cs))
       assert(Set(30.0, 50.0)(child.maxHealth) && Set(1, 4)(child.litterSize) && Set(0.5, 1.5)(child.movement.speed))
       assertEquals(child.generation, 1)
-      assertEquals(child.parents, Some((0, 1)))
+      assertEquals(child.parents, Vector(0, 1))
       assertEqualsDouble(child.health, child.maxHealth, 1e-9)
 
   test("family macro-mutation creates a new species"):
@@ -218,7 +224,7 @@ class ModelSuite extends munit.FunSuite:
     val end = run(world(couple()*), 40)
     assertEquals(end.births, 1L)
     val child = end.organisms.find(_.id == 100).get
-    assertEquals(child.parents, Some((0, 1)))
+    assertEquals(child.parents, Vector(0, 1))
     assertEquals(child.generation, 1)
     assert(child.log.head.text.startsWith("родился от #0 × #1"))
     val parents = end.organisms.filter(_.id < 2)
@@ -239,24 +245,82 @@ class ModelSuite extends munit.FunSuite:
       rules.copy(reproduction = rules.reproduction.copy(bodyCostPerHealth = 1.0))
     )
 
-  test("plants sprout in every sector over time, up to the limit"):
-    val withPlants = cfg.rules.copy(plants = cfg.rules.plants.copy(spawnRate = 1, maxPerSector = 5))
-    val w = World(WorldConfig(2, 1, 100), withPlants, cfg.genesis, Vector.empty, seed = 1)
+  test("forage sprouts in every sector over time, up to the limit"):
+    val withForage = cfg.rules.copy(forage = cfg.rules.forage.copy(spawnRate = 1, reproductionRate = 0, maxPerSector = 5))
+    val w = World(WorldConfig(2, 1, 100), withForage, cfg.genesis, Vector.empty, seed = 1)
     val end = run(w, 50)
-    assertEquals(end.plants.groupMapReduce(_.sector)(_ => 1)(_ + _), Map(SectorId(0, 0) -> 5, SectorId(1, 0) -> 5))
-    assertEquals(end.plants.map(_.id).distinct.size, 10)
+    assert(end.organisms.forall(_.forage))
+    assertEquals(end.organisms.groupMapReduce(_.sector)(_ => 1)(_ + _), Map(SectorId(0, 0) -> 5, SectorId(1, 0) -> 5))
+    assertEquals(end.organisms.map(_.id).distinct.size, 10)
+    assertEquals(end.forageSpawned, 10L)
 
-  test("hungry organism walks to a plant and eats it"):
-    val hungry = organism(0, satiety = 30)
-    val plant = Plant(0, SectorId(0, 0), Vec2(56, 50), rules.plants.food)
-    val end = run(world(hungry).copy(plants = Vector(plant), nextPlantId = 1), 40)
+  test("forage buds clones until its sector is full"):
+    val budding = rules.copy(forage = rules.forage.copy(reproductionRate = 1, awakeningRate = 0, maxPerSector = 5))
+    val end = run(world(forageAt(0, Vec2(50, 50), r = budding)).copy(rules = budding), 200)
+    assertEquals(end.organisms.size, 5)
+    assert(end.organisms.forall(_.forage))
+    assertEquals(end.buds, 4L)
+    assert(end.organisms.filter(_.id != 0).forall(_.parents.size == 1))
+
+  test("budded clone without mutations copies the parent's genes"):
+    val p = forageAt(0, Vec2(50, 50), heading = 1.2)
+    val k = Genetics.bud(100, p, Vec2(51, 50), 0, world(p).copy(rules = noMutation), Random(3))
+    assert(!k.newSpecies && k.mutations.isEmpty)
+    assertEquals(k.organism.movement, p.movement)
+    assertEquals(k.organism.attack.g, p.attack.g)
+    assertEquals((k.organism.maxHealth, k.organism.generation, k.organism.parents), (p.maxHealth, 1, Vector(0)))
+
+  test("awakened clone becomes an active organism of a new species"):
+    val awakening = rules.copy(forage = rules.forage.copy(reproductionRate = 1, awakeningRate = 1, maxPerSector = 10))
+    val end = Simulation.step(world(forageAt(0, Vec2(50, 50), heading = 1.2, r = awakening)).copy(rules = awakening))
+    assertEquals(end.awakenings, 1L)
+    val child = end.organisms.find(_.id != 0).get
+    assert(!child.forage)
+    assert(cfg.genesis.movement.families.contains(child.species))
+    assertEqualsDouble(child.satiety, rules.reproduction.offspringSatiety * rules.energy.maxSatiety, 1e-9)
+    assert(child.log.head.text.startsWith("ПРОБУДИЛСЯ из корма #0"), child.log)
+    assertEquals(child.movement.period, 40)
+
+  test("forage is passive: crawls straight, never hungers, decides or heals"):
+    val f = forageAt(0, Vec2(50, 50), 0)
+    val end = run(world(f), 100)
     val o = end.organisms.head
-    assert(o.log.exists(_.text.startsWith("съел растение")), o.log)
-    assert(end.plants.isEmpty)
+    assertEqualsDouble(o.pos.x, 50 + 100 * rules.forage.speed, 1e-9)
+    assertEqualsDouble(o.pos.y, 50, 1e-9)
+    assertEquals((o.health, o.satiety, o.reserve, o.behaviour), (f.health, f.satiety, f.reserve, Behaviour.Cruise))
+
+  test("hungry organism hunts forage, kills it and eats the body"):
+    val hungry = organism(0, satiety = 30)
+    val f = forageAt(1, Vec2(58, 50), math.Pi / 2)
+    val end = run(world(hungry, f), 60)
+    val o = end.organisms.find(_.id == 0).get
+    assert(o.log.exists(_.text.startsWith("заметил корм #1")), o.log)
+    assert(o.log.exists(_.text.startsWith("убил #1 и съел")), o.log)
+    assert(!end.organisms.exists(_.forage))
     assert(o.satiety > 30)
 
+  test("carrion outranks forage even for a nearly sated organism"):
+    val nearlySated = organism(0, satiety = 97, reserve = 40)
+    val f = forageAt(1, Vec2(54, 50))
+    val corpse = Corpse(9, Family.Constant, SectorId(0, 0), Vec2(46, 50), 2, 0)
+    val end = run(world(nearlySated, f).copy(corpses = Vector(corpse)), 5)
+    val log = end.organisms.find(_.id == 0).get.log
+    assert(log.exists(_.text.startsWith("заметил падаль #9")), log)
+    assert(!log.exists(_.text.startsWith("заметил корм")), log)
+
+  test("config refuses carrion ranked below forage"):
+    intercept[IllegalArgumentException](
+      rules.copy(scavenging = rules.scavenging.copy(satietyThreshold = rules.forage.satietyThreshold - 0.1))
+    )
+
+  test("well-fed organisms do not flee from forage"):
+    val sated = organism(0, satiety = 100, reserve = 40)
+    val f = forageAt(1, Vec2(55, 50), 0)
+    val end = run(world(sated, f), 100)
+    assert(!end.organisms.find(_.id == 0).get.log.exists(_.text.contains("отдалиться")))
+
   test("default config file loads"):
-    assertEquals(cfg.genesis.movement.families.toSet, Family.values.toSet)
+    assertEquals(cfg.genesis.movement.families.toSet, Family.values.toSet - Family.Constant)
     assertEquals(cfg.genesis.attack.functions.cubic.size, 4)
 
   test("latex: powers, signs, unit coefficients and zero terms"):

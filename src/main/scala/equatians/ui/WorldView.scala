@@ -21,9 +21,9 @@ object Palette:
   val Carrion: Color = Color(170, 140, 110)
   val Scavenge: Color = Color(200, 170, 120)
   val Mate: Color = Color(255, 140, 200)
-  val Plant: Color = Color(90, 190, 90)
 
   val byFamily: Map[Family, Color] = Map(
+    Family.Constant    -> Color(90, 190, 90),
     Family.Linear      -> Color(86, 180, 233),
     Family.Quadratic   -> Color(230, 159, 0),
     Family.Cubic       -> Color(213, 94, 0),
@@ -57,12 +57,14 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
       repaint()
   )
 
-  /** Показывает новое состояние мира и дописывает текущие позиции в следы. */
+  /** Показывает новое состояние мира и дописывает текущие позиции в следы.
+    * У корма следов нет: он ползёт по прямой, а таких организмов в мире больше всего — их следы дорого рисовать.
+    */
   def show(w: World): Unit =
     world = w
     val alive = w.organisms.iterator.map(_.id).toSet
     trails.filterInPlace((id, _) => alive(id))
-    for o <- w.organisms do
+    for o <- w.organisms if !o.forage do
       val trail = trails.getOrElseUpdate(o.id, mutable.ArrayDeque.empty)
       trail.append(o.pos)
       if trail.size > trailLength then trail.removeHead()
@@ -124,7 +126,6 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
     val l = currentLayout
     world.config.sectors.foreach(drawSector(g, l, _))
-    world.plants.foreach(drawPlant(g, l, _))
     world.corpses.foreach(drawCarrion(g, l, _))
     if showTrails then world.organisms.foreach(drawTrail(g, l, _))
     world.organisms.foreach(drawIntent(g, l, _))
@@ -195,16 +196,13 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
         lineTo(f, Color(c.getRed, c.getGreen, c.getBlue, 140), dash)
       case Behaviour.Scavenge(c) =>
         world.corpses.find(_.id == c).foreach(corpse => lineToPoint(corpse.sector, corpse.pos, Palette.Scavenge, BasicStroke(1.5f)))
-      case Behaviour.Graze(p) =>
-        world.plants.find(_.id == p).foreach { plant =>
-          val c = Palette.Plant
-          lineToPoint(plant.sector, plant.pos, Color(c.getRed, c.getGreen, c.getBlue, 150), BasicStroke(1f))
-        }
       case Behaviour.Mate(p) =>
         lineTo(p, Palette.Mate, BasicStroke(1.5f))
       case Behaviour.Cruise => ()
 
-  /** Организм — круг цвета вида (размер по здоровью) и чёрточка по курсу; выбранный обведён. */
+  /** Организм — круг цвета вида (размер по весовой категории) и чёрточка по курсу; выбранный обведён.
+    * Корм рисуется одним кругом без чёрточки — его много, и курс у него постоянный.
+    */
   private def drawOrganism(g: Graphics2D, l: Layout, o: Organism): Unit =
     val (x, y) = l.toScreen(o.sector, o.pos)
     val r = screenRadius(l, o)
@@ -212,25 +210,12 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     g.setColor(Palette.byFamily(o.family))
     g.fill(Ellipse2D.Double(x - r, y - r, 2 * r, 2 * r))
     g.setStroke(BasicStroke(1.5f))
-    g.draw(Line2D.Double(x, y, x + (r + 5) * math.cos(h), y - (r + 5) * math.sin(h)))
+    if !o.forage then g.draw(Line2D.Double(x, y, x + (r + 5) * math.cos(h), y - (r + 5) * math.sin(h)))
     if selectedId.contains(o.id) then
       g.setColor(Color.WHITE)
       g.draw(Ellipse2D.Double(x - r - 4, y - r - 4, 2 * r + 8, 2 * r + 8))
 
-  /** Растение — маленький зелёный ромб; размер — по оставшейся еде. */
-  private def drawPlant(g: Graphics2D, l: Layout, p: Plant): Unit =
-    val (x, y) = l.toScreen(p.sector, p.pos)
-    val r = (world.rules.sizePerSqrtHealth * math.sqrt(p.food) * l.scale).max(1.5)
-    val diamond = Path2D.Double()
-    diamond.moveTo(x, y - r)
-    diamond.lineTo(x + r, y)
-    diamond.lineTo(x, y + r)
-    diamond.lineTo(x - r, y)
-    diamond.closePath()
-    g.setColor(Palette.Plant)
-    g.fill(diamond)
-
-  /** Падаль — бурое кольцо с заливкой цвета вида; площадь пропорциональна оставшейся еде. */
+  /** Падаль — бурое кольцо с полупрозрачной заливкой цвета вида; площадь пропорциональна оставшейся еде. */
   private def drawCarrion(g: Graphics2D, l: Layout, c: Corpse): Unit =
     val (x, y) = l.toScreen(c.sector, c.pos)
     val r = (world.rules.sizePerSqrtHealth * math.sqrt(c.food) * l.scale).max(2.5)
@@ -238,7 +223,7 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     g.setColor(Color(tint.getRed, tint.getGreen, tint.getBlue, 60))
     g.fill(Ellipse2D.Double(x - r, y - r, 2 * r, 2 * r))
     g.setColor(Palette.Carrion)
-    g.setStroke(BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, Array(2f, 2f), 0f))
+    g.setStroke(BasicStroke(1f))
     g.draw(Ellipse2D.Double(x - r, y - r, 2 * r, 2 * r))
 
   /** Крестик на месте гибели выбранного организма. */

@@ -69,13 +69,17 @@ object AppConfig:
         rate = c.getDouble("healing.rate"),
         cost = c.getDouble("healing.cost")
       ),
-      plants = PlantRules(
-        spawnRate = c.getDouble("plants.spawn-rate"),
-        maxPerSector = c.getInt("plants.max-per-sector"),
-        initialPerSector = c.getInt("plants.initial-per-sector"),
-        food = c.getDouble("plants.food"),
-        satietyThreshold = c.getDouble("plants.satiety-threshold"),
-        probability = c.getDouble("plants.probability")
+      forage = ForageRules(
+        reproductionRate = c.getDouble("forage.reproduction-rate"),
+        awakeningRate = c.getDouble("forage.awakening-rate"),
+        spawnRate = c.getDouble("forage.spawn-rate"),
+        maxPerSector = c.getInt("forage.max-per-sector"),
+        initialPerSector = c.getInt("forage.initial-per-sector"),
+        speed = c.getDouble("forage.speed"),
+        health = c.getDouble("forage.health"),
+        reserve = c.getDouble("forage.reserve"),
+        satietyThreshold = c.getDouble("forage.satiety-threshold"),
+        probability = c.getDouble("forage.probability")
       ),
       scavenging = ScavengeRules(
         probability = c.getDouble("scavenging.probability"),
@@ -139,6 +143,7 @@ object AppConfig:
     def polynomial(name: String, degree: Int): Vector[GeneRange] =
       (0 to degree).map(i => range(f, s"$name.a$i")).toVector
     FunctionRanges(
+      constant = range(f, "constant.c"),
       linear = polynomial("linear", 1),
       quadratic = polynomial("quadratic", 2),
       cubic = polynomial("cubic", 3),
