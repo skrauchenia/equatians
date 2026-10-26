@@ -11,40 +11,63 @@ object Genesis:
   /** Создаёт мир с `count` организмами в случайных секторах и точках.
     * Результат детерминирован: одинаковые параметры и `seed` дают одинаковый мир.
     */
-  def randomWorld(world: WorldConfig, genesis: GenesisConfig, count: Int, seed: Long): World =
+  def randomWorld(world: WorldConfig, rules: Rules, genesis: GenesisConfig, count: Int, seed: Long): World =
     val rnd = Random(seed)
     val sectors = world.sectors.toVector
     val organisms = Vector.tabulate(count) { id =>
-      Organism(
+      val health = genesis.health.sample(rnd)
+      val reserveShare = genesis.reserve.sample(rnd)
+      val o = Organism(
         id = id,
-        movement = randomMovement(genesis, rnd),
+        movement = randomMovement(genesis.movement, rnd),
+        attack = randomAttack(genesis.attack, rules.attack, rnd),
         sector = sectors(rnd.nextInt(sectors.size)),
-        pos = Vec2(rnd.nextDouble() * world.sectorSize, rnd.nextDouble() * world.sectorSize)
+        pos = Vec2(rnd.nextDouble() * world.sectorSize, rnd.nextDouble() * world.sectorSize),
+        health = health,
+        maxHealth = health,
+        satiety = rules.energy.maxSatiety,
+        reserve = reserveShare * rules.energy.reservePerHealth * health
       )
+      o.logged(0, Narrative.born(o, rules), rules.logSize)
     }
-    World(world, organisms)
+    World(world, rules, organisms, seed)
 
   /** Случайный орган движения: семейство из `genesis.families`, гены из настроенных диапазонов. */
-  def randomMovement(genesis: GenesisConfig, rnd: Random): MovementOrgan =
-    val m = genesis.movement
+  def randomMovement(genesis: MovementGenesis, rnd: Random): MovementOrgan =
     MovementOrgan(
-      f = randomFunction(genesis.families(rnd.nextInt(genesis.families.size)), genesis.functions, rnd),
-      period = m.period.sample(rnd).round.toInt.max(1),
-      span = m.span.sample(rnd),
-      speed = m.speed.sample(rnd)
+      f = randomFunction(pick(genesis.families, rnd), genesis.functions, rnd),
+      period = genesis.period.sample(rnd).round.toInt.max(1),
+      span = genesis.span.sample(rnd),
+      speed = genesis.speed.sample(rnd)
     )
 
-  /** Случайная функция заданного семейства. Свободный член всегда из [0, 2π) — это начальный курс. */
+  /** Случайный орган атаки. Функции с D(0) ≤ 0 (не бьют даже в упор) перегенерируются. */
+  def randomAttack(genesis: AttackGenesis, rules: AttackRules, rnd: Random): AttackOrgan =
+    val family = pick(genesis.families, rnd)
+    Iterator
+      .continually(randomFunction(family, genesis.functions, rnd))
+      .take(1000)
+      .find(g => AttackOrgan.positive(g(0)) > 0)
+      .map(AttackOrgan(_, rules.maxReach, rules.costFactor))
+      .getOrElse(throw IllegalArgumentException(
+        s"genesis.attack.functions.${family.toString.toLowerCase}: диапазоны почти не дают D(0) > 0"
+      ))
+
+  /** Случайная функция заданного семейства с коэффициентами из `ranges`. */
   def randomFunction(family: Family, ranges: FunctionRanges, rnd: Random): MathFunction =
-    def angle = rnd.nextDouble() * 2 * math.Pi
-    def polynomial(rs: Vector[GeneRange]) = Polynomial(angle +: rs.map(_.sample(rnd)))
+    def polynomial(rs: Vector[GeneRange]) = Polynomial(rs.map(_.sample(rnd)))
     family match
       case Family.Linear      => polynomial(ranges.linear)
       case Family.Quadratic   => polynomial(ranges.quadratic)
       case Family.Cubic       => polynomial(ranges.cubic)
       case Family.Logarithmic =>
-        Logarithmic(ranges.logarithmic.a.sample(rnd), ranges.logarithmic.b.sample(rnd), angle)
+        val r = ranges.logarithmic
+        Logarithmic(r.a.sample(rnd), r.b.sample(rnd), r.c.sample(rnd))
       case Family.Sinusoidal =>
-        Sinusoidal(ranges.sinusoidal.a.sample(rnd), ranges.sinusoidal.k.sample(rnd), angle, angle)
+        val r = ranges.sinusoidal
+        Sinusoidal(r.a.sample(rnd), r.k.sample(rnd), r.phi.sample(rnd), r.c.sample(rnd))
       case Family.Exponential =>
-        Exponential(ranges.exponential.a.sample(rnd), ranges.exponential.b.sample(rnd), angle)
+        val r = ranges.exponential
+        Exponential(r.a.sample(rnd), r.b.sample(rnd), r.c.sample(rnd))
+
+  private def pick[A](xs: Vector[A], rnd: Random): A = xs(rnd.nextInt(xs.size))

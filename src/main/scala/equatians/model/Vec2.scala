@@ -5,6 +5,9 @@ final case class Vec2(x: Double, y: Double):
   /** Покомпонентная сумма. */
   def +(o: Vec2): Vec2 = Vec2(x + o.x, y + o.y)
 
+  /** Покомпонентная разность. */
+  def -(o: Vec2): Vec2 = Vec2(x - o.x, y - o.y)
+
   /** Умножение на скаляр. */
   def *(k: Double): Vec2 = Vec2(x * k, y * k)
 

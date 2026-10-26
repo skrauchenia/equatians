@@ -2,9 +2,36 @@ package equatians
 
 import equatians.model.*
 import equatians.model.MathFunction.*
-import equatians.sim.Genesis
+import equatians.sim.{Genesis, Simulation}
 
 class ModelSuite extends munit.FunSuite:
+
+  private val cfg = AppConfig.load()
+  private val rules = cfg.rules
+
+  /** Организм в секторе (0, 0) с прямолинейным движением на восток и сильным ударом в упор. */
+  private def organism(
+      id: Int,
+      f: MathFunction = Polynomial(Vector(0.0, 0.0)),
+      pos: Vec2 = Vec2(50, 50),
+      health: Double = 40,
+      maxHealth: Double = -1,
+      satiety: Double = 100,
+      reserve: Double = 0,
+      speed: Double = 1.0,
+      attack: AttackOrgan = AttackOrgan(Polynomial(Vector(10.0, -12.0)), 15, 0.05)
+  ): Organism =
+    val max = if maxHealth < 0 then health else maxHealth
+    Organism(id, MovementOrgan(f, 10, 1.0, speed), attack, SectorId(0, 0), pos, health, max, satiety, reserve)
+
+  private def world(os: Organism*): World = World(WorldConfig(1, 1, 100), rules, os.toVector, seed = 1)
+
+  private val sine = Sinusoidal(1, 1, 0, 0)
+
+  /** Удар, убивающий почти кого угодно в радиусе ~12. */
+  private val deadly = AttackOrgan(Polynomial(Vector(200.0, -240.0)), 15, 0.05)
+
+  private def run(w: World, ticks: Int): World = Iterator.iterate(w)(Simulation.step).drop(ticks).next()
 
   test("polynomial evaluates with coefficients in ascending order"):
     val f = Polynomial(Vector(1.0, -2.0, 3.0)) // 1 - 2x + 3x²
@@ -16,32 +43,140 @@ class ModelSuite extends munit.FunSuite:
     assertEqualsDouble(organ.argument(5), 1.0, 1e-9)
     assertEqualsDouble(organ.argument(15), 1.0, 1e-9)
 
-  test("step length equals organ speed away from walls"):
-    val organ = MovementOrgan(Polynomial(Vector(0.7, 0.0)), period = 10, span = 1.0, speed = 1.5)
-    val o = Organism(0, organ, SectorId(0, 0), Vec2(50, 50))
-    val moved = o.step(100).pos
+  test("cruise step length equals organ speed away from walls"):
+    val moved = Simulation.step(world(organism(0, speed = 1.5))).organisms.head.pos
     assertEqualsDouble(math.hypot(moved.x - 50, moved.y - 50), 1.5, 1e-9)
 
   test("organism bounces off the sector wall and stays inside"):
-    val east = MovementOrgan(Polynomial(Vector(0.0, 0.0)), period = 10, span = 1.0, speed = 1.0)
-    val o = Organism(0, east, SectorId(0, 0), Vec2(99.5, 50)).step(100)
+    val o = Simulation.step(world(organism(0, pos = Vec2(99.5, 50)))).organisms.head
     assertEqualsDouble(o.pos.x, 99.5, 1e-9)
     assert(o.mirrorX)
-    assert(o.displacement.x < 0)
+    assert(o.cruiseDisplacement.x < 0)
 
-  test("random world keeps every organism inside its sector for many ticks"):
-    val cfg = AppConfig.load()
-    val start = Genesis.randomWorld(WorldConfig(3, 2, 100), cfg.genesis, count = 100, seed = 7)
-    val end = Iterator.iterate(start)(_.step).drop(5000).next()
-    assertEquals(end.tick, 5000L)
+  test("bigger and faster organisms spend more satiety"):
+    def spent(health: Double, speed: Double) =
+      100 - Simulation.step(world(organism(0, health = health, speed = speed))).organisms.head.satiety
+    assert(spent(60, 0.5) > spent(20, 0.5))
+    assert(spent(20, 1.5) > spent(20, 0.5))
+
+  test("reserve is burned at its energy density once satiety is empty"):
+    val before = organism(0, satiety = 0, reserve = 10)
+    val after = Simulation.step(world(before)).organisms.head
+    val cost = Simulation.metabolicCost(after, rules)
+    assertEqualsDouble(after.reserve, 10 - cost / rules.energy.reserveDensity, 1e-9)
+    assertEqualsDouble(after.health, 40.0, 1e-9)
+    val emptied = Simulation.step(world(organism(0, satiety = 0.001, reserve = 10))).organisms.head
+    assert(emptied.log.exists(_.text.contains("расходует жир")))
+
+  test("starving organism loses health and eventually dies"):
+    val end = run(world(organism(0, health = 5, satiety = 0, reserve = 0)), 20000)
+    assert(end.organisms.isEmpty)
+    assert(end.graveyard.head.log.last.text.contains("умер от голода"))
+    assertEqualsDouble(end.corpses.head.food, rules.meatPerHealth * 5, 1e-9)
+
+  test("eating fills satiety first and puts the surplus into reserve"):
+    val meal = organism(0, satiety = 90, reserve = 0).eat(5, rules)
+    assertEqualsDouble(meal.toSatiety, 10.0, 1e-9)
+    assertEqualsDouble(meal.toReserve, (5 * rules.energy.reserveDensity - 10) / rules.energy.reserveDensity, 1e-9)
+    assertEqualsDouble(meal.eaten, 5.0, 1e-9)
+    assertEqualsDouble(meal.organism.satiety, rules.energy.maxSatiety, 1e-9)
+
+  test("reserve capacity is proportional to max health and caps eating"):
+    val small = organism(0, health = 10, satiety = 100)
+    val big = organism(1, health = 60, satiety = 100)
+    assertEqualsDouble(big.maxReserve(rules) / small.maxReserve(rules), 6.0, 1e-9)
+    val meal = small.eat(1000, rules)
+    assertEqualsDouble(meal.organism.reserve, small.maxReserve(rules), 1e-9)
+    assertEqualsDouble(meal.eaten, small.maxReserve(rules), 1e-9)
+
+  test("bigger organisms hit harder, and wounds keep their weight class"):
+    val small = organism(0, health = 10)
+    val big = organism(1, health = 90)
+    assertEqualsDouble(big.strikeDamage(3, rules) / small.strikeDamage(3, rules), 3.0, 1e-9)
+    val wounded = big.copy(health = 5)
+    assertEqualsDouble(wounded.strikeDamage(3, rules), big.strikeDamage(3, rules), 1e-9)
+    assertEqualsDouble(wounded.radius(rules), big.radius(rules), 1e-9)
+
+  test("wounded organism heals at a satiety cost, but not without energy"):
+    val wounded = organism(0, health = 20, maxHealth = 40, speed = 0.0)
+    val healed = Simulation.step(world(wounded)).organisms.head
+    assertEqualsDouble(healed.health, 20 + rules.healing.rate, 1e-9)
+    val metabolism = Simulation.metabolicCost(healed, rules)
+    assertEqualsDouble(healed.satiety, 100 - metabolism - rules.healing.rate * rules.healing.cost, 1e-6)
+    val broke = organism(0, health = 20, maxHealth = 40, satiety = 0, reserve = 0)
+    assert(Simulation.step(world(broke)).organisms.head.health < 20)
+
+  test("attack organ: range is the first root, cost is the integral"):
+    val organ = AttackOrgan(Polynomial(Vector(1.0, -2.0)), maxReach = 10, costFactor = 0.1) // D(u) = 1 - 2u
+    assertEqualsDouble(organ.range, 5.0, 1e-6)
+    assertEqualsDouble(organ.cost, 0.1 * 10 * 0.25, 1e-4)
+    assertEqualsDouble(organ.damage(2), 0.6, 1e-9)
+    assertEqualsDouble(organ.damage(6), 0.0, 1e-9)
+
+  test("organisms of the same species never attack each other"):
+    val a = organism(0, satiety = 0, reserve = 40)
+    val b = organism(1, satiety = 0, reserve = 40, pos = Vec2(53, 50))
+    val end = run(world(a, b), 300)
+    assertEquals(end.organisms.size, 2)
+    assert(end.organisms.forall(_.log.forall(e => !e.text.contains("ударил"))))
+
+  test("hungry predator chases, kills and eats a stranger"):
+    val predator = organism(0, satiety = 0, reserve = 40)
+    val prey = organism(1, f = sine, pos = Vec2(53, 50), health = 5, reserve = 5)
+    val end = run(world(predator, prey), 100)
+    assertEquals(end.organisms.map(_.id), Vector(0))
+    val p = end.organisms.head
+    assert(p.log.exists(_.text.contains("решил преследовать #1")))
+    assert(p.log.exists(_.text.contains("убил #1 и съел")))
+    assert(p.satiety > 0)
+    assert(end.graveyard.head.log.last.text.contains("погиб от удара #0"))
+
+  test("uneaten fat stays as carrion that another organism eats"):
+    val predator = organism(0, satiety = 0, reserve = 40, attack = deadly)
+    val prey = organism(1, f = sine, pos = Vec2(53, 50), health = 60, reserve = 50)
+    val scavenger = organism(2, pos = Vec2(60, 50), satiety = 50, speed = 0.5)
+    val afterKill = Simulation.step(world(predator, prey, scavenger))
+    assertEquals(afterKill.corpses.map(_.id), Vector(1))
+    // Хищник платил за удар из жира (сытость была 0), так что съел 100 сытости и восполнил потраченный жир.
+    val eaten = (100.0 + deadly.cost) / rules.energy.reserveDensity
+    val food = rules.meatPerHealth * 60 + 50
+    assertEqualsDouble(afterKill.corpses.head.food, food - eaten, 0.1)
+    val end = run(afterKill, 60)
+    assert(end.organisms.find(_.id == 2).get.log.exists(_.text.contains("съел падаль #1")))
+
+  test("carrion takes priority over chasing a live stranger"):
+    val hungry = organism(0, satiety = 0, reserve = 40)
+    val stranger = organism(1, f = sine, pos = Vec2(55, 50))
+    val corpse = Corpse(9, Family.Cubic, SectorId(0, 0), Vec2(45, 50), 10, 0)
+    val end = run(world(hungry, stranger).copy(corpses = Vector(corpse)), 5)
+    val log = end.organisms.find(_.id == 0).get.log
+    assert(log.exists(_.text.contains("заметил падаль #9")))
+    assert(!log.exists(_.text.contains("решил преследовать")))
+
+  test("genesis spawns organisms with full health and satiety"):
+    val w = Genesis.randomWorld(WorldConfig(3, 2, 100), rules, cfg.genesis, count = 50, seed = 3)
+    w.organisms.foreach { o =>
+      assertEqualsDouble(o.health, o.maxHealth, 1e-9)
+      assertEqualsDouble(o.satiety, rules.energy.maxSatiety, 1e-9)
+      assert(o.reserve <= o.maxReserve(rules))
+    }
+
+  test("random world keeps its invariants over many ticks"):
+    val start = Genesis.randomWorld(WorldConfig(3, 2, 100), rules, cfg.genesis, count = 100, seed = 7)
+    val end = run(start, 3000)
+    assertEquals(end.tick, 3000L)
+    assertEquals(end.organisms.size + end.graveyard.size, 100)
+    assert(end.corpses.forall(_.food > 0))
     end.organisms.foreach { o =>
-      assert(o.pos.x >= 0 && o.pos.x <= 100 && o.pos.y >= 0 && o.pos.y <= 100, o)
+      assert(o.pos.x >= 0 && o.pos.x <= 100 && o.pos.y >= 0 && o.pos.y <= 100, o.id)
+      assert(o.health > 0 && o.satiety >= 0 && o.reserve >= 0, o.id)
+      assert(o.satiety <= rules.energy.maxSatiety + 1e-9 && o.reserve <= o.maxReserve(rules) + 1e-9, o.id)
+      assert(o.health <= o.maxHealth + 1e-9, o.id)
     }
 
   test("default config file loads"):
-    val cfg = AppConfig.load()
-    assertEquals(cfg.genesis.families.toSet, Family.values.toSet)
-    assertEquals(cfg.genesis.functions.cubic.size, 3)
+    assertEquals(cfg.genesis.movement.families.toSet, Family.values.toSet)
+    assertEquals(cfg.genesis.attack.functions.cubic.size, 4)
 
   test("latex: powers, signs, unit coefficients and zero terms"):
     assertEquals(Polynomial(Vector(1.0, -3.0, 1.0)).latex, "x^{2} - 3x + 1")

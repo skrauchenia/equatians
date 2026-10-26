@@ -15,6 +15,11 @@ object Palette:
   val SectorBorder: Color = Color(70, 74, 88)
   val Grid: Color = Color(38, 41, 50)
   val Label: Color = Color(120, 125, 140)
+  val Chase: Color = Color(235, 80, 70)
+  val Flee: Color = Color(120, 170, 255)
+  val Dead: Color = Color(150, 150, 160)
+  val Carrion: Color = Color(170, 140, 110)
+  val Scavenge: Color = Color(200, 170, 120)
 
   val byFamily: Map[Family, Color] = Map(
     Family.Linear      -> Color(86, 180, 233),
@@ -53,6 +58,8 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
   /** Показывает новое состояние мира и дописывает текущие позиции в следы. */
   def show(w: World): Unit =
     world = w
+    val alive = w.organisms.iterator.map(_.id).toSet
+    trails.filterInPlace((id, _) => alive(id))
     for o <- w.organisms do
       val trail = trails.getOrElseUpdate(o.id, mutable.ArrayDeque.empty)
       trail.append(o.pos)
@@ -65,8 +72,8 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     selectedId = None
     show(w)
 
-  /** Выбранный организм в текущем состоянии мира. */
-  def selected: Option[Organism] = selectedId.flatMap(id => world.organisms.find(_.id == id))
+  /** Выбранный организм в текущем состоянии мира — живой или из недавно погибших. */
+  def selected: Option[Organism] = selectedId.flatMap(world.find)
 
   /** Геометрия: где на экране сектор и как перевести локальные координаты в пиксели. */
   private final case class Layout(cell: Double, gap: Double, ox: Double, oy: Double):
@@ -97,15 +104,15 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     val totalH = cell * cfg.rows + gap * (cfg.rows - 1)
     Layout(cell, gap, (getWidth - totalW) / 2, (getHeight - totalH) / 2)
 
-  /** Ближайший к точке экрана организм в радиусе 12 пикселей. */
+  /** Ближайший к точке экрана организм, по которому попал клик (с запасом в несколько пикселей). */
   private def organismAt(x: Int, y: Int): Option[Organism] =
     val l = currentLayout
     world.organisms
       .map { o =>
         val (sx, sy) = l.toScreen(o.sector, o.pos)
-        o -> math.hypot(sx - x, sy - y)
+        o -> (math.hypot(sx - x, sy - y) - screenRadius(l, o))
       }
-      .filter(_._2 < 12)
+      .filter(_._2 < 8)
       .minByOption(_._2)
       .map(_._1)
 
@@ -115,8 +122,11 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
     val l = currentLayout
     world.config.sectors.foreach(drawSector(g, l, _))
+    world.corpses.foreach(drawCarrion(g, l, _))
     if showTrails then world.organisms.foreach(drawTrail(g, l, _))
+    world.organisms.foreach(drawIntent(g, l, _))
     world.organisms.foreach(drawOrganism(g, l, _))
+    selected.filterNot(_.alive).foreach(drawCorpse(g, l, _))
 
   /** Фон сектора, сетка по четвертям, рамка и подпись с координатами сектора. */
   private def drawSector(g: Graphics2D, l: Layout, s: SectorId): Unit =
@@ -155,15 +165,63 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
       g.draw(path)
     }
 
-  /** Организм — точка цвета вида и чёрточка по курсу; выбранный обведён. */
+  /** Радиус организма на экране: по размеру тела, но не меньше 2.5 пикселя, чтобы было видно. */
+  private def screenRadius(l: Layout, o: Organism): Double = (o.radius(world.rules) * l.scale).max(2.5)
+
+  /** Линия намерения: красная к цели преследования (толстая — сразу после удара),
+    * голубая пунктирная — от того, от кого организм убегает.
+    */
+  private def drawIntent(g: Graphics2D, l: Layout, o: Organism): Unit =
+    val (x, y) = l.toScreen(o.sector, o.pos)
+    def lineToPoint(sector: SectorId, p: Vec2, color: Color, stroke: BasicStroke): Unit =
+      val (tx, ty) = l.toScreen(sector, p)
+      g.setColor(color)
+      g.setStroke(stroke)
+      g.draw(Line2D.Double(x, y, tx, ty))
+    def lineTo(id: Int, color: Color, stroke: BasicStroke): Unit =
+      world.organisms.find(_.id == id).foreach(other => lineToPoint(other.sector, other.pos, color, stroke))
+    o.behaviour match
+      case Behaviour.Chase(t) =>
+        val justHit = world.tick - o.lastAttackTick <= 3
+        val stroke = if justHit then BasicStroke(3f) else BasicStroke(1f)
+        val c = Palette.Chase
+        lineTo(t, if justHit then c else Color(c.getRed, c.getGreen, c.getBlue, 140), stroke)
+      case Behaviour.Flee(f) =>
+        val dash = BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, Array(4f, 4f), 0f)
+        val c = Palette.Flee
+        lineTo(f, Color(c.getRed, c.getGreen, c.getBlue, 140), dash)
+      case Behaviour.Scavenge(c) =>
+        world.corpses.find(_.id == c).foreach(corpse => lineToPoint(corpse.sector, corpse.pos, Palette.Scavenge, BasicStroke(1.5f)))
+      case Behaviour.Cruise => ()
+
+  /** Организм — круг цвета вида (размер по здоровью) и чёрточка по курсу; выбранный обведён. */
   private def drawOrganism(g: Graphics2D, l: Layout, o: Organism): Unit =
     val (x, y) = l.toScreen(o.sector, o.pos)
-    val r = 4.0
+    val r = screenRadius(l, o)
     val h = o.heading
     g.setColor(Palette.byFamily(o.family))
     g.fill(Ellipse2D.Double(x - r, y - r, 2 * r, 2 * r))
     g.setStroke(BasicStroke(1.5f))
-    g.draw(Line2D.Double(x, y, x + 9 * math.cos(h), y - 9 * math.sin(h)))
+    g.draw(Line2D.Double(x, y, x + (r + 5) * math.cos(h), y - (r + 5) * math.sin(h)))
     if selectedId.contains(o.id) then
       g.setColor(Color.WHITE)
       g.draw(Ellipse2D.Double(x - r - 4, y - r - 4, 2 * r + 8, 2 * r + 8))
+
+  /** Падаль — бурое кольцо с заливкой цвета вида; площадь пропорциональна оставшейся еде. */
+  private def drawCarrion(g: Graphics2D, l: Layout, c: Corpse): Unit =
+    val (x, y) = l.toScreen(c.sector, c.pos)
+    val r = (world.rules.sizePerSqrtHealth * math.sqrt(c.food) * l.scale).max(2.5)
+    val tint = Palette.byFamily(c.species)
+    g.setColor(Color(tint.getRed, tint.getGreen, tint.getBlue, 60))
+    g.fill(Ellipse2D.Double(x - r, y - r, 2 * r, 2 * r))
+    g.setColor(Palette.Carrion)
+    g.setStroke(BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, Array(2f, 2f), 0f))
+    g.draw(Ellipse2D.Double(x - r, y - r, 2 * r, 2 * r))
+
+  /** Крестик на месте гибели выбранного организма. */
+  private def drawCorpse(g: Graphics2D, l: Layout, o: Organism): Unit =
+    val (x, y) = l.toScreen(o.sector, o.pos)
+    g.setColor(Palette.Dead)
+    g.setStroke(BasicStroke(2f))
+    g.draw(Line2D.Double(x - 6, y - 6, x + 6, y + 6))
+    g.draw(Line2D.Double(x - 6, y + 6, x + 6, y - 6))

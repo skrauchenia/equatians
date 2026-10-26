@@ -11,12 +11,9 @@ final case class GeneRange(min: Double, max: Double):
   /** Равномерно выбирает число из диапазона. */
   def sample(rnd: Random): Double = min + rnd.nextDouble() * (max - min)
 
-/** Диапазоны генов органа движения. */
-final case class MovementRanges(period: GeneRange, span: GeneRange, speed: GeneRange)
-
 /** Диапазоны коэффициентов для каждого семейства функций.
   *
-  * Для полиномов — диапазоны a1..an по возрастанию степени (свободный член a0 не настраивается).
+  * Для полиномов — диапазоны a0..an по возрастанию степени.
   */
 final case class FunctionRanges(
     linear: Vector[GeneRange],
@@ -28,10 +25,35 @@ final case class FunctionRanges(
 )
 
 object FunctionRanges:
-  final case class Logarithmic(a: GeneRange, b: GeneRange)
-  final case class Sinusoidal(a: GeneRange, k: GeneRange)
-  final case class Exponential(a: GeneRange, b: GeneRange)
+  /** a·ln(1 + b·|x|) + c */
+  final case class Logarithmic(a: GeneRange, b: GeneRange, c: GeneRange)
+  /** a·sin(k·x + φ) + c */
+  final case class Sinusoidal(a: GeneRange, k: GeneRange, phi: GeneRange, c: GeneRange)
+  /** a·e^(b·x) + c */
+  final case class Exponential(a: GeneRange, b: GeneRange, c: GeneRange)
 
-/** Параметры начального заселения мира. */
-final case class GenesisConfig(families: Vector[Family], movement: MovementRanges, functions: FunctionRanges):
-  require(families.nonEmpty, "нужно хотя бы одно семейство в genesis.families")
+/** Гены органа движения. `families` задаёт, какие виды вообще появляются в мире. */
+final case class MovementGenesis(
+    families: Vector[Family],
+    period: GeneRange,
+    span: GeneRange,
+    speed: GeneRange,
+    functions: FunctionRanges
+):
+  require(families.nonEmpty, "нужно хотя бы одно семейство в genesis.movement.families")
+
+/** Гены органа атаки. */
+final case class AttackGenesis(families: Vector[Family], functions: FunctionRanges):
+  require(families.nonEmpty, "нужно хотя бы одно семейство в genesis.attack.families")
+
+/** Параметры начального заселения мира. Организмы рождаются с полным здоровьем и 100% сытостью.
+  *
+  * @param health  максимальное здоровье
+  * @param reserve начальный жир как доля от его максимума
+  */
+final case class GenesisConfig(
+    health: GeneRange,
+    reserve: GeneRange,
+    movement: MovementGenesis,
+    attack: AttackGenesis
+)

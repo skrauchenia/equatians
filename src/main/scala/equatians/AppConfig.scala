@@ -1,7 +1,7 @@
 package equatians
 
 import com.typesafe.config.{Config, ConfigFactory}
-import equatians.model.{Family, WorldConfig}
+import equatians.model.*
 import equatians.sim.*
 
 import scala.jdk.CollectionConverters.*
@@ -17,6 +17,7 @@ final case class UiConfig(speedSteps: Vector[Int], frameBudgetMs: Int, trailLeng
 final case class AppConfig(
     world: WorldConfig,
     population: PopulationConfig,
+    rules: Rules,
     genesis: GenesisConfig,
     ui: UiConfig
 )
@@ -40,6 +41,7 @@ object AppConfig:
         count = c.getInt("population.count"),
         seed = c.getLong("population.seed")
       ),
+      rules = rules(c.getConfig("rules")),
       genesis = genesis(c.getConfig("genesis")),
       ui = UiConfig(
         speedSteps = c.getIntList("ui.speed-steps").asScala.map(_.toInt).toVector,
@@ -48,32 +50,86 @@ object AppConfig:
       )
     )
 
-  private def genesis(c: Config): GenesisConfig =
-    def range(cfg: Config, path: String): GeneRange =
-      cfg.getDoubleList(path).asScala.map(_.toDouble).toList match
-        case List(lo, hi) => GeneRange(lo, hi)
-        case other        => throw IllegalArgumentException(s"$path: ожидается [min, max], получено $other")
-
-    def polynomial(cfg: Config, degree: Int): Vector[GeneRange] =
-      (1 to degree).map(i => range(cfg, s"a$i")).toVector
-
-    val f = c.getConfig("functions")
-    GenesisConfig(
-      families = c.getStringList("families").asScala.map(family).toVector,
-      movement = MovementRanges(
-        period = range(c, "movement.period"),
-        span = range(c, "movement.span"),
-        speed = range(c, "movement.speed")
+  private def rules(c: Config): Rules =
+    Rules(
+      perceptionRadius = c.getDouble("perception-radius"),
+      logSize = c.getInt("log-size"),
+      graveyardSize = c.getInt("graveyard-size"),
+      sizePerSqrtHealth = c.getDouble("body.size-per-sqrt-health"),
+      meatPerHealth = c.getDouble("body.meat-per-health"),
+      energy = EnergyRules(
+        maxSatiety = c.getDouble("energy.max-satiety"),
+        reservePerHealth = c.getDouble("energy.reserve-per-health"),
+        reserveDensity = c.getDouble("energy.reserve-density"),
+        baseMetabolism = c.getDouble("energy.base-metabolism"),
+        movementCost = c.getDouble("energy.movement-cost"),
+        starvationDamage = c.getDouble("energy.starvation-damage")
       ),
-      functions = FunctionRanges(
-        linear = polynomial(f.getConfig("linear"), 1),
-        quadratic = polynomial(f.getConfig("quadratic"), 2),
-        cubic = polynomial(f.getConfig("cubic"), 3),
-        logarithmic = FunctionRanges.Logarithmic(range(f, "logarithmic.a"), range(f, "logarithmic.b")),
-        sinusoidal = FunctionRanges.Sinusoidal(range(f, "sinusoidal.a"), range(f, "sinusoidal.k")),
-        exponential = FunctionRanges.Exponential(range(f, "exponential.a"), range(f, "exponential.b"))
+      healing = HealingRules(
+        rate = c.getDouble("healing.rate"),
+        cost = c.getDouble("healing.cost")
+      ),
+      scavenging = ScavengeRules(
+        probability = c.getDouble("scavenging.probability"),
+        satietyThreshold = c.getDouble("scavenging.satiety-threshold"),
+        eatReach = c.getDouble("scavenging.eat-reach")
+      ),
+      behaviour = BehaviourRules(
+        decisionInterval = c.getInt("behaviour.decision-interval"),
+        hungerThreshold = c.getDouble("behaviour.hunger-threshold"),
+        maxChaseProbability = c.getDouble("behaviour.max-chase-probability"),
+        fleeSatietyThreshold = c.getDouble("behaviour.flee-satiety-threshold"),
+        fleeReserveThreshold = c.getDouble("behaviour.flee-reserve-threshold"),
+        fleeProbability = c.getDouble("behaviour.flee-probability"),
+        loseTargetFactor = c.getDouble("behaviour.lose-target-factor")
+      ),
+      attack = AttackRules(
+        maxReach = c.getDouble("attack.max-reach"),
+        costFactor = c.getDouble("attack.cost-factor"),
+        cooldown = c.getInt("attack.cooldown"),
+        referenceHealth = c.getDouble("attack.reference-health")
       )
     )
+
+  private def genesis(c: Config): GenesisConfig =
+    GenesisConfig(
+      health = range(c, "health"),
+      reserve = range(c, "reserve"),
+      movement = MovementGenesis(
+        families = families(c, "movement.families"),
+        period = range(c, "movement.period"),
+        span = range(c, "movement.span"),
+        speed = range(c, "movement.speed"),
+        functions = functions(c.getConfig("movement.functions"))
+      ),
+      attack = AttackGenesis(
+        families = families(c, "attack.families"),
+        functions = functions(c.getConfig("attack.functions"))
+      )
+    )
+
+  private def functions(f: Config): FunctionRanges =
+    def polynomial(name: String, degree: Int): Vector[GeneRange] =
+      (0 to degree).map(i => range(f, s"$name.a$i")).toVector
+    FunctionRanges(
+      linear = polynomial("linear", 1),
+      quadratic = polynomial("quadratic", 2),
+      cubic = polynomial("cubic", 3),
+      logarithmic = FunctionRanges.Logarithmic(
+        range(f, "logarithmic.a"), range(f, "logarithmic.b"), range(f, "logarithmic.c")),
+      sinusoidal = FunctionRanges.Sinusoidal(
+        range(f, "sinusoidal.a"), range(f, "sinusoidal.k"), range(f, "sinusoidal.phi"), range(f, "sinusoidal.c")),
+      exponential = FunctionRanges.Exponential(
+        range(f, "exponential.a"), range(f, "exponential.b"), range(f, "exponential.c"))
+    )
+
+  private def range(cfg: Config, path: String): GeneRange =
+    cfg.getDoubleList(path).asScala.map(_.toDouble).toList match
+      case List(lo, hi) => GeneRange(lo, hi)
+      case other        => throw IllegalArgumentException(s"$path: ожидается [min, max], получено $other")
+
+  private def families(cfg: Config, path: String): Vector[Family] =
+    cfg.getStringList(path).asScala.map(family).toVector
 
   private def family(name: String): Family =
     Family.values

@@ -2,7 +2,7 @@ package equatians.ui
 
 import equatians.AppConfig
 import equatians.model.*
-import equatians.sim.Genesis
+import equatians.sim.{Genesis, Narrative, Simulation}
 
 import java.awt.*
 import java.awt.event.{ActionEvent, KeyEvent}
@@ -15,7 +15,7 @@ object Main:
     val config = AppConfig.load()
     SwingUtilities.invokeLater(() => SimulatorApp(config).start())
 
-/** Окно симулятора: мир слева, панель управления справа.
+/** Окно симулятора: мир слева, панель управления и карточка организма справа.
   *
   * Скорость задаётся в тиках за кадр. Кадр ~60 раз в секунду, но на симуляцию в кадре
   * отводится не больше `ui.frame-budget-ms` — если не успеваем, реальная скорость (TPS)
@@ -24,6 +24,7 @@ object Main:
 final class SimulatorApp(config: AppConfig):
   private val SpeedSteps = config.ui.speedSteps
   private val FrameBudgetNanos = config.ui.frameBudgetMs * 1_000_000L
+  private val rules = config.rules
 
   private var seed = config.population.seed
   private var world = createWorld()
@@ -39,13 +40,23 @@ final class SimulatorApp(config: AppConfig):
   private val pauseButton = JButton()
   private val trailsBox = JCheckBox("Следы (T)", true)
   private val legendLabels = Family.values.map(f => f -> JLabel()).toMap
+  private val deathsLabel = JLabel()
 
   private val infoTitle = JLabel()
+  private val healthBar = StatBar(Color(220, 90, 90))
+  private val satietyBar = StatBar(Color(120, 200, 120))
+  private val reserveBar = StatBar(Color(240, 200, 90))
   private val headingFormula = JLabel()
   private val argumentFormula = JLabel()
+  private val damageFormula = JLabel()
+  private val attackInfo = JLabel()
   private val infoState = JLabel()
+  private val logArea = JTextArea()
+
   /** Для какого организма уже отрендерены формулы — чтобы не пересобирать их каждый кадр. */
   private var formulasFor: Option[Int] = None
+  /** Что сейчас показано в журнале — чтобы не перезаписывать текст без изменений. */
+  private var logShown: Option[(Int, Int, Option[LogEntry])] = None
 
   private var ticksSinceMeasure = 0L
   private var lastMeasure = System.nanoTime()
@@ -63,13 +74,14 @@ final class SimulatorApp(config: AppConfig):
     bindKeys()
     refreshAll()
     frame.pack()
+    frame.setSize(1340, 900)
     frame.setLocationRelativeTo(null)
     frame.setVisible(true)
     Timer(16, _ => onFrame()).start()
 
   /** Новый случайный мир по текущему сиду и параметрам из конфига. */
   private def createWorld(): World =
-    Genesis.randomWorld(config.world, config.genesis, config.population.count, seed)
+    Genesis.randomWorld(config.world, rules, config.genesis, config.population.count, seed)
 
   /** Один кадр: прогнать сколько успеем тиков, перерисовать, раз в полсекунды обновить TPS. */
   private def onFrame(): Unit =
@@ -77,7 +89,7 @@ final class SimulatorApp(config: AppConfig):
       val deadline = System.nanoTime() + FrameBudgetNanos
       var done = 0
       while done < ticksPerFrame && System.nanoTime() < deadline do
-        world = world.step
+        world = Simulation.step(world)
         done += 1
       ticksSinceMeasure += done
       view.show(world)
@@ -95,7 +107,7 @@ final class SimulatorApp(config: AppConfig):
   /** Ставит на паузу и делает ровно один тик. */
   private def stepOnce(): Unit =
     running = false
-    world = world.step
+    world = Simulation.step(world)
     view.show(world)
 
   /** Пересоздаёт мир со следующим сидом. */
@@ -121,45 +133,80 @@ final class SimulatorApp(config: AppConfig):
     pauseButton.setText(if running then "Пауза (Space)" else "Пуск (Space)")
     val counts = world.organisms.groupMapReduce(_.family)(_ => 1)(_ + _)
     legendLabels.foreach((f, l) => l.setText(s"${f.title}: ${counts.getOrElse(f, 0)}"))
+    deathsLabel.setText(s"Погибло: ${config.population.count - world.organisms.size}   Падаль: ${world.corpses.size}")
     refreshInfo()
 
-  /** Карточка выбранного организма: формулы рендерятся при смене выбора, состояние — каждый кадр. */
+  /** Текущее занятие организма для заголовка карточки. */
+  private def activity(o: Organism): String =
+    if !o.alive then "погиб"
+    else
+      o.behaviour match
+        case Behaviour.Cruise   => "обычное движение"
+        case Behaviour.Chase(t) => s"преследует #$t"
+        case Behaviour.Flee(f)  => s"отдаляется от #$f"
+        case Behaviour.Scavenge(c) => s"идёт к падали #$c"
+
+  /** Карточка выбранного организма: формулы рендерятся при смене выбора, остальное — каждый кадр. */
   private def refreshInfo(): Unit =
     val selected = view.selected
     if selected.map(_.id) != formulasFor then
       formulasFor = selected.map(_.id)
       selected match
         case Some(o) =>
-          infoTitle.setText(s"<html><b>Организм #${o.id}</b> — ${o.family.title}</html>")
           Formula.render(headingFormula, o.movement.headingLatex)
           Formula.render(argumentFormula, o.movement.argumentLatex)
+          Formula.render(damageFormula, s"${o.attack.damageLatex}, \\quad ${o.attack.argumentLatex}")
+          attackInfo.setText(
+            s"<html>удар: дальность ${Narrative.num(o.attack.range)}, стоимость ${Narrative.num(o.attack.cost)}, " +
+              s"перезарядка ${rules.attack.cooldown} т.</html>"
+          )
         case None =>
-          infoTitle.setText("<html>Кликните по организму,<br>чтобы увидеть его функцию.</html>")
-          headingFormula.setIcon(null)
-          argumentFormula.setIcon(null)
-    infoState.setText(selected.fold("") { o =>
-      val m = o.movement
-      def f(v: Double) = Latex.number(v)
-      s"""<html>шаг: ${f(m.speed)} за тик<br><br>
-         |сектор: (${o.sector.col}, ${o.sector.row})<br>
-         |позиция: (${f(o.pos.x)}, ${f(o.pos.y)})<br>
-         |возраст t: ${o.age}<br>
-         |x = ${f(m.argument(o.age))}<br>
-         |курс: ${f(math.toDegrees(o.heading))}°</html>""".stripMargin
-    })
+          Seq(headingFormula, argumentFormula, damageFormula).foreach(_.setIcon(null))
+          attackInfo.setText("")
 
-  /** Правая панель: счётчики, управление скоростью, легенда видов и карточка организма. */
+    selected match
+      case None =>
+        infoTitle.setText("<html>Кликните по организму,<br>чтобы увидеть его функции и журнал.</html>")
+        Seq(healthBar, satietyBar, reserveBar).foreach(_.set(0, ""))
+        infoState.setText("")
+      case Some(o) =>
+        val e = rules.energy
+        infoTitle.setText(s"<html><b>Организм #${o.id}</b> — ${o.family.title} · ${activity(o)}</html>")
+        healthBar.set(o.health / o.maxHealth, s"здоровье ${Narrative.num(o.health.max(0))} / ${Narrative.num(o.maxHealth)}")
+        satietyBar.set(o.satietyFraction(rules), s"сытость ${Narrative.num(o.satiety)} / ${Narrative.num(e.maxSatiety)}")
+        reserveBar.set(
+          o.reserveFraction(rules),
+          s"жир ${Narrative.num(o.reserve)} / ${Narrative.num(o.maxReserve(rules))}  (×${Narrative.num(e.reserveDensity)} к сытости)"
+        )
+        val m = o.movement
+        infoState.setText(
+          s"<html>сектор (${o.sector.col}, ${o.sector.row}), позиция (${Narrative.num(o.pos.x)}, ${Narrative.num(o.pos.y)})<br>" +
+            s"возраст t = ${o.age}, x = ${Narrative.num(m.argument(o.age))}, шаг ${Narrative.num(m.speed)}<br>" +
+            s"радиус ${Narrative.num(o.radius(rules))}, урон ×${String.format(Locale.ROOT, "%.2f", o.sizeFactor(rules))} за размер<br>" +
+            s"расход ${String.format(Locale.ROOT, "%.3f", Simulation.metabolicCost(o, rules))} / тик, " +
+            s"отхил до ${Narrative.num(rules.healing.rate)} / тик за ${Narrative.num(rules.healing.cost)} сытости</html>"
+        )
+    refreshLog(selected)
+
+  /** Журнал выбранного организма; прокручивается к последней записи при каждом изменении. */
+  private def refreshLog(selected: Option[Organism]): Unit =
+    val key = selected.map(o => (o.id, o.log.size, o.log.lastOption))
+    if key != logShown then
+      logShown = key
+      val text = selected.fold("")(_.log.map(e => s"[${e.tick}] ${e.text}").mkString("\n"))
+      logArea.setText(text)
+      logArea.setCaretPosition(text.length)
+
+  /** Правая панель: сверху управление, легенда и карточка организма, снизу — журнал. */
   private def sidePanel: JComponent =
-    val panel = JPanel()
-    panel.setLayout(BoxLayout(panel, BoxLayout.Y_AXIS))
-    panel.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12))
-    panel.setPreferredSize(Dimension(360, 0))
+    val top = JPanel()
+    top.setLayout(BoxLayout(top, BoxLayout.Y_AXIS))
 
-    def add(c: JComponent): Unit =
+    def add(c: JComponent, gap: Int = 4): Unit =
       c.setAlignmentX(Component.LEFT_ALIGNMENT)
       c.setFocusable(false)
-      panel.add(c)
-      panel.add(Box.createVerticalStrut(6))
+      top.add(c)
+      top.add(Box.createVerticalStrut(gap))
 
     def button(title: String)(action: => Unit): JButton =
       val b = JButton(title)
@@ -174,24 +221,46 @@ final class SimulatorApp(config: AppConfig):
     speedSlider.setMajorTickSpacing(1)
     speedSlider.addChangeListener(_ => refreshAll())
     add(speedSlider)
+    val buttons = JPanel(GridLayout(1, 3, 4, 0))
     pauseButton.addActionListener(_ => { togglePause(); refreshAll() })
-    add(pauseButton)
-    add(button("Один тик (N)")(stepOnce()))
-    add(button("Новый мир (R)")(newWorld()))
+    Seq(pauseButton, button("Тик (N)")(stepOnce()), button("Новый (R)")(newWorld())).foreach { b =>
+      b.setFocusable(false)
+      buttons.add(b)
+    }
+    add(buttons)
     trailsBox.addActionListener(_ => view.showTrails = trailsBox.isSelected)
-    add(trailsBox)
+    add(trailsBox, 10)
 
-    panel.add(Box.createVerticalStrut(10))
     add(JLabel("Виды (функция движения):"))
+    val legend = JPanel(GridLayout(0, 2, 6, 2))
     Family.values.foreach { f =>
       val l = legendLabels(f)
       l.setIcon(ColorIcon(Palette.byFamily(f)))
-      add(l)
+      legend.add(l)
     }
+    add(legend)
+    add(deathsLabel, 12)
 
-    panel.add(Box.createVerticalStrut(14))
-    Seq(infoTitle, headingFormula, argumentFormula, infoState).foreach(add)
-    panel.add(Box.createVerticalGlue())
+    add(infoTitle, 6)
+    Seq(healthBar, satietyBar, reserveBar).foreach(add(_, 3))
+    add(headingFormula, 2)
+    add(argumentFormula, 2)
+    add(damageFormula, 2)
+    add(attackInfo)
+    add(infoState)
+
+    logArea.setEditable(false)
+    logArea.setLineWrap(true)
+    logArea.setWrapStyleWord(true)
+    logArea.setFont(Font(Font.MONOSPACED, Font.PLAIN, 11))
+    val logScroll = JScrollPane(logArea)
+    logScroll.setBorder(BorderFactory.createTitledBorder("Журнал"))
+
+    val panel = JPanel(BorderLayout(0, 6))
+    panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10))
+    panel.setPreferredSize(Dimension(400, 0))
+    panel.add(top, BorderLayout.NORTH)
+    panel.add(logScroll, BorderLayout.CENTER)
     panel
 
   /** Горячие клавиши, работающие при любом фокусе внутри окна. */
