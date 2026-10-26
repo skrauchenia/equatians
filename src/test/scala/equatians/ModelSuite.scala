@@ -3,6 +3,7 @@ package equatians
 import equatians.model.*
 import equatians.model.MathFunction.*
 import equatians.sim.{Forage, Genesis, Genetics, Simulation}
+import equatians.stats.*
 
 import scala.util.Random
 
@@ -318,6 +319,37 @@ class ModelSuite extends munit.FunSuite:
     val f = forageAt(1, Vec2(55, 50), 0)
     val end = run(world(sated, f), 100)
     assert(!end.organisms.find(_.id == 0).get.log.exists(_.text.contains("отдалиться")))
+
+  test("census sums traits per sector and separates forage"):
+    val a = organism(0, health = 20, speed = 0.5)
+    val b = organism(1, health = 60, speed = 1.5)
+    val f = forageAt(2, Vec2(10, 10))
+    val c = Census.of(world(a, b, f))(SectorId(0, 0))
+    assertEquals(c.active.count, 2)
+    assertEqualsDouble(c.active.mean(Trait.Speed).get, 1.0, 1e-9)
+    assertEqualsDouble(c.active.mean(Trait.MaxHealth).get, 40.0, 1e-9)
+    assertEquals(c.forage.count, 1)
+    assertEquals(c.species, Map(Family.Linear -> 2, Family.Constant -> 1))
+
+  test("simulation counts births and deaths per sector"):
+    val end = run(world(couple()*), 40)
+    assertEquals(end.events(SectorId(0, 0)).births, 1L)
+    val starving = run(world(organism(0, health = 5, satiety = 0)), 20000)
+    assertEquals(starving.events(SectorId(0, 0)).deaths, 1L)
+
+  test("history thins old samples, doubles the interval and keeps cumulative events"):
+    val h = History(initialInterval = 10, maxSamples = 8)
+    var w = world(couple()*)
+    h.reset(w)
+    for _ <- 1 to 400 do
+      w = Simulation.step(w)
+      h.record(w)
+    val samples = h.snapshot
+    assert(samples.size <= 8, samples.size)
+    assert(h.currentInterval > 10)
+    assertEquals(samples.head.tick, 0L)
+    assertEquals(samples.map(_.tick), samples.map(_.tick).sorted)
+    assertEquals(samples.last.eventsOf(Scope.Whole).births, w.events.values.map(_.births).sum)
 
   test("default config file loads"):
     assertEquals(cfg.genesis.movement.families.toSet, Family.values.toSet - Family.Constant)

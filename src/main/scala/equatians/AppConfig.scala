@@ -9,8 +9,12 @@ import scala.jdk.CollectionConverters.*
 /** Параметры начальной популяции. */
 final case class PopulationConfig(count: Int, seed: Long)
 
+/** Параметры статистики секторов: интервал переписи, предел числа снимков, частота перерисовки графиков. */
+final case class StatsConfig(sampleInterval: Int, maxSamples: Int, refreshMs: Int):
+  require(sampleInterval > 0 && maxSamples >= 4, "ui.stats: sample-interval > 0, max-samples ≥ 4")
+
 /** Параметры окна визуализации. */
-final case class UiConfig(speedSteps: Vector[Int], frameBudgetMs: Int, trailLength: Int):
+final case class UiConfig(speedSteps: Vector[Int], frameBudgetMs: Int, trailLength: Int, stats: StatsConfig):
   require(speedSteps.nonEmpty, "ui.speed-steps не должен быть пустым")
 
 /** Все глобальные параметры эксперимента, прочитанные из `application.conf`. */
@@ -46,7 +50,12 @@ object AppConfig:
       ui = UiConfig(
         speedSteps = c.getIntList("ui.speed-steps").asScala.map(_.toInt).toVector,
         frameBudgetMs = c.getInt("ui.frame-budget-ms"),
-        trailLength = c.getInt("ui.trail-length")
+        trailLength = c.getInt("ui.trail-length"),
+        stats = StatsConfig(
+          sampleInterval = c.getInt("ui.stats.sample-interval"),
+          maxSamples = c.getInt("ui.stats.max-samples"),
+          refreshMs = c.getInt("ui.stats.refresh-ms")
+        )
       )
     )
 

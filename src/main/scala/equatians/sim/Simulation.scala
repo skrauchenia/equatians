@@ -72,8 +72,26 @@ object Simulation:
       births = world.births + newborns.size,
       forageSpawned = world.forageSpawned + sprouts.size,
       buds = world.buds + buds.size,
-      awakenings = world.awakenings + budOffspring.count(_.newSpecies)
+      awakenings = world.awakenings + budOffspring.count(_.newSpecies),
+      events = countEvents(world.events, newborns, buds, sprouts, dead)
     )
+
+  /** Прибавляет события тика к накопительным счётчикам секторов. */
+  private def countEvents(
+      events: Map[SectorId, SectorEvents],
+      newborns: Vector[Organism],
+      buds: Vector[Organism],
+      sprouts: Vector[Organism],
+      dead: Vector[Organism]
+  ): Map[SectorId, SectorEvents] =
+    val happened =
+      newborns.map(o => o.sector -> SectorEvents(births = 1)) ++
+        buds.map(o => o.sector -> (if o.forage then SectorEvents(forageBorn = 1) else SectorEvents(awakenings = 1))) ++
+        sprouts.map(o => o.sector -> SectorEvents(forageBorn = 1)) ++
+        dead.map(o => o.sector -> (if o.forage then SectorEvents(forageEaten = 1) else SectorEvents(deaths = 1)))
+    happened.foldLeft(events) { case (acc, (sector, e)) =>
+      acc.updated(sector, acc.getOrElse(sector, SectorEvents.Zero) + e)
+    }
 
   /** Вероятность того, что организм выберет охоту: 0 на пороге голода, растёт линейно к нулевой сытости. */
   def chaseProbability(o: Organism, rules: Rules): Double =

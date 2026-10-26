@@ -13,6 +13,7 @@ object Palette:
   val Background: Color = Color(14, 15, 19)
   val Sector: Color = Color(26, 28, 35)
   val SectorBorder: Color = Color(70, 74, 88)
+  val SectorHighlight: Color = Color(120, 170, 255)
   val Grid: Color = Color(38, 41, 50)
   val Label: Color = Color(120, 125, 140)
   val Chase: Color = Color(235, 80, 70)
@@ -46,6 +47,12 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
   /** Вызывается после клика: с организмом под курсором или `None`, если клик мимо. */
   var onSelect: Option[Organism] => Unit = _ => ()
 
+  /** Вызывается при клике по пустому месту сектора. */
+  var onSectorClick: SectorId => Unit = _ => ()
+
+  /** Сектор, открытый в окне статистики — его рамка подсвечивается. */
+  var highlightedSector: Option[SectorId] = None
+
   setBackground(Palette.Background)
   setPreferredSize(Dimension(960, 660))
 
@@ -54,6 +61,7 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
       val picked = organismAt(e.getX, e.getY)
       selectedId = picked.map(_.id)
       onSelect(picked)
+      if picked.isEmpty then sectorAt(e.getX, e.getY).foreach(onSectorClick)
       repaint()
   )
 
@@ -108,6 +116,11 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     val totalH = cell * cfg.rows + gap * (cfg.rows - 1)
     Layout(cell, gap, (getWidth - totalW) / 2, (getHeight - totalH) / 2)
 
+  /** Сектор под точкой экрана, если она попала в сектор, а не в промежуток между ними. */
+  private def sectorAt(x: Int, y: Int): Option[SectorId] =
+    val l = currentLayout
+    world.config.sectors.find(s => l.sectorRect(s).contains(x.toDouble, y.toDouble))
+
   /** Ближайший к точке экрана организм, по которому попал клик (с запасом в несколько пикселей). */
   private def organismAt(x: Int, y: Int): Option[Organism] =
     val l = currentLayout
@@ -145,8 +158,9 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
       val (_, y) = l.toScreen(s, Vec2(0, size * i / 4))
       g.draw(Line2D.Double(x, r.getMinY, x, r.getMaxY))
       g.draw(Line2D.Double(r.getMinX, y, r.getMaxX, y))
-    g.setColor(Palette.SectorBorder)
-    g.setStroke(BasicStroke(1.5f))
+    val highlighted = highlightedSector.contains(s)
+    g.setColor(if highlighted then Palette.SectorHighlight else Palette.SectorBorder)
+    g.setStroke(BasicStroke(if highlighted then 3f else 1.5f))
     g.draw(r)
     g.setColor(Palette.Label)
     g.setFont(g.getFont.deriveFont(11f))

@@ -3,6 +3,7 @@ package equatians.ui
 import equatians.AppConfig
 import equatians.model.*
 import equatians.sim.{Genesis, Narrative, Simulation}
+import equatians.stats.{History, Scope}
 
 import java.awt.*
 import java.awt.event.{ActionEvent, KeyEvent}
@@ -31,6 +32,15 @@ final class SimulatorApp(config: AppConfig):
   private var running = true
 
   private val view = WorldView(world, config.ui.trailLength)
+  private val history = History(config.ui.stats.sampleInterval, config.ui.stats.maxSamples)
+  private val statsWindow = SectorStatsWindow(
+    () => world,
+    history,
+    config.ui.stats.refreshMs,
+    scope => view.highlightedSector = scope match
+      case Scope.Sector(id) => Some(id)
+      case Scope.Whole      => None
+  )
   private val frame = JFrame("Equatians")
 
   private val tickLabel = JLabel()
@@ -67,6 +77,8 @@ final class SimulatorApp(config: AppConfig):
   /** Собирает окно, вешает клавиши и запускает таймер кадров. Вызывать в потоке Swing. */
   def start(): Unit =
     view.onSelect = _ => refreshInfo()
+    view.onSectorClick = id => statsWindow.show(Scope.Sector(id))
+    history.reset(world)
     frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE)
     frame.getContentPane.setLayout(BorderLayout())
     frame.getContentPane.add(view, BorderLayout.CENTER)
@@ -90,6 +102,7 @@ final class SimulatorApp(config: AppConfig):
       var done = 0
       while done < ticksPerFrame && System.nanoTime() < deadline do
         world = Simulation.step(world)
+        history.record(world)
         done += 1
       ticksSinceMeasure += done
       view.show(world)
@@ -108,13 +121,16 @@ final class SimulatorApp(config: AppConfig):
   private def stepOnce(): Unit =
     running = false
     world = Simulation.step(world)
+    history.record(world)
     view.show(world)
 
   /** Пересоздаёт мир со следующим сидом. */
   private def newWorld(): Unit =
     seed += 1
     world = createWorld()
+    history.reset(world)
     view.reset(world)
+    if statsWindow.isVisible then statsWindow.refresh()
     refreshAll()
 
   /** Сдвигает ползунок скорости на `delta` ступеней в пределах `ui.speed-steps`. */
@@ -247,6 +263,9 @@ final class SimulatorApp(config: AppConfig):
       buttons.add(b)
     }
     add(buttons)
+    val statsButton = button("Статистика мира (S)")(statsWindow.show(Scope.Whole))
+    statsButton.setToolTipText("Клик по пустому месту сектора — статистика сектора")
+    add(statsButton)
     trailsBox.addActionListener(_ => view.showTrails = trailsBox.isSelected)
     add(trailsBox, 10)
 
@@ -293,6 +312,7 @@ final class SimulatorApp(config: AppConfig):
     bind(KeyEvent.VK_N, "step")(stepOnce())
     bind(KeyEvent.VK_R, "reset")(newWorld())
     bind(KeyEvent.VK_T, "trails")(toggleTrails())
+    bind(KeyEvent.VK_S, "stats")(statsWindow.show(Scope.Whole))
     bind(KeyEvent.VK_EQUALS, "faster")(changeSpeed(1))
     bind(KeyEvent.VK_PLUS, "faster2")(changeSpeed(1))
     bind(KeyEvent.VK_MINUS, "slower")(changeSpeed(-1))

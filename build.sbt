@@ -8,6 +8,7 @@ lazy val root = (project in file("."))
     libraryDependencies ++= Seq(
       "com.typesafe" % "config" % "1.4.3",
       "org.scilab.forge" % "jlatexmath" % "1.0.7",
+      "org.jfree" % "jfreechart" % "1.5.5",
       "org.scalameta" %% "munit" % "1.1.0" % Test
     ),
     Compile / mainClass := Some("equatians.ui.Main"),
