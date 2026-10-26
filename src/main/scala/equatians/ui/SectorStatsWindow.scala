@@ -49,8 +49,10 @@ final class SectorStatsWindow(
   )
 
   private val frame = JFrame("Статистика")
-  private val scopes: Vector[Scope] = Scope.Whole +: world().config.sectors.toVector.map(Scope.Sector(_))
+  /** Области для выбора: весь мир и каждый сектор. Пересобираются, если у мира поменялась сетка. */
+  private var scopes: Vector[Scope] = scopesOf(world())
   private val scopeBox = JComboBox[String](scopes.map(_.title).toArray)
+  private var syncing = false
   private val summary = JLabel()
   private val tabbed = JTabbedPane()
   private val timer = Timer(refreshMs, _ => refresh())
@@ -63,8 +65,9 @@ final class SectorStatsWindow(
     }
     tabbed.addChangeListener(_ => refresh())
     scopeBox.addActionListener { _ =>
-      onScopeChange(scope)
-      refresh()
+      if !syncing then
+        onScopeChange(scope)
+        refresh()
     }
     val top = JPanel(BorderLayout(10, 0))
     top.setBorder(BorderFactory.createEmptyBorder(8, 10, 4, 10))
@@ -79,13 +82,29 @@ final class SectorStatsWindow(
   }
 
   /** Выбранная область. */
-  def scope: Scope = scopes(scopeBox.getSelectedIndex.max(0))
+  def scope: Scope = scopes.lift(scopeBox.getSelectedIndex).getOrElse(Scope.Whole)
+
+  private def scopesOf(w: World): Vector[Scope] = Scope.Whole +: w.config.sectors.toVector.map(Scope.Sector(_))
+
+  /** Если сетка мира изменилась — пересобирает список областей; выбранная сохраняется, если она ещё есть. */
+  private def syncScopes(): Unit =
+    val actual = scopesOf(world())
+    if actual != scopes then
+      val selected = scope
+      syncing = true
+      scopes = actual
+      scopeBox.removeAllItems()
+      scopes.foreach(sc => scopeBox.addItem(sc.title))
+      scopeBox.setSelectedIndex(scopes.indexOf(selected).max(0))
+      syncing = false
+      if scope != selected then onScopeChange(scope)
 
   /** Открыто ли окно. */
   def isVisible: Boolean = frame.isVisible
 
   /** Показывает статистику области `s`, открывая окно при необходимости. */
   def show(s: Scope): Unit =
+    syncScopes()
     scopeBox.setSelectedIndex(scopes.indexOf(s).max(0))
     if !frame.isVisible then
       frame.setLocationByPlatform(true)
@@ -98,6 +117,7 @@ final class SectorStatsWindow(
   def refresh(): Unit =
     if !frame.isVisible then timer.stop()
     else
+      syncScopes()
       val w = world()
       val input = Input(history.snapshot, w, scope)
       frame.setTitle(s"Статистика — ${scope.title}")

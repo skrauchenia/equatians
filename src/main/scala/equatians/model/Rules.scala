@@ -23,11 +23,11 @@ final case class HealingRules(rate: Double, cost: Double)
 
 /** Корм — организмы с функцией движения-константой: размножаются делением и иногда «пробуждаются».
   *
-  * @param reproductionRate вероятность почкования за тик при пустом секторе; падает линейно до 0 к max-per-sector
+  * @param reproductionRate вероятность почкования за тик при пустом секторе; падает линейно до 0 к пределу сектора
   * @param awakeningRate    вероятность, что у отпочковавшегося клона функция движения сменит семейство
   * @param spawnRate        вероятность за тик, что в секторе корм появится сам по себе
-  * @param maxPerSector     предел числа кормовых организмов в секторе
-  * @param initialPerSector сколько корма в секторе при генезисе
+  * @param concentration        предел числа корма на площади 100×100; предел сектора — пропорционально площади
+  * @param initialConcentration сколько корма на площади 100×100 при генезисе
   * @param speed            шаг за тик
   * @param health           здоровье (оно же максимальное)
   * @param reserve          жир; вместе с мясом тела — это еда, которую он даёт
@@ -38,8 +38,8 @@ final case class ForageRules(
     reproductionRate: Double,
     awakeningRate: Double,
     spawnRate: Double,
-    maxPerSector: Int,
-    initialPerSector: Int,
+    concentration: Double,
+    initialConcentration: Double,
     speed: Double,
     health: Double,
     reserve: Double,
@@ -48,6 +48,16 @@ final case class ForageRules(
 ):
   require(spawnRate >= 0 && spawnRate <= 1, "forage.spawn-rate должен быть в [0, 1]")
   require(health > 0, "forage.health должен быть > 0")
+  require(concentration >= 0 && initialConcentration >= 0, "forage: концентрации не могут быть отрицательными")
+
+  /** Предел числа корма в секторе со стороной `sectorSize`: концентрация на 100×100, пересчитанная на площадь. */
+  def maxPerSector(sectorSize: Double): Int = perArea(concentration, sectorSize)
+
+  /** Сколько корма в секторе со стороной `sectorSize` при генезисе. */
+  def initialPerSector(sectorSize: Double): Int = perArea(initialConcentration, sectorSize)
+
+  private def perArea(perHundredSquare: Double, sectorSize: Double): Int =
+    math.round(perHundredSquare * (sectorSize / 100) * (sectorSize / 100)).toInt
 
 /** Поедание падали.
   *

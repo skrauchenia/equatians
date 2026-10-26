@@ -3,7 +3,7 @@ package equatians.ui
 import equatians.model.*
 
 import java.awt.*
-import java.awt.event.{MouseAdapter, MouseEvent}
+import java.awt.event.{MouseAdapter, MouseEvent, MouseWheelEvent}
 import java.awt.geom.{Ellipse2D, Line2D, Path2D, Rectangle2D}
 import javax.swing.JPanel
 import scala.collection.mutable
@@ -53,17 +53,65 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
   /** Сектор, открытый в окне статистики — его рамка подсвечивается. */
   var highlightedSector: Option[SectorId] = None
 
+  /** Масштаб и сдвиг карты: колесо мыши — масштаб вокруг курсора, перетаскивание — сдвиг. */
+  val viewport: Viewport = Viewport()
+
+  /** Вызывается после изменения масштаба или сдвига — например, чтобы обновить подпись масштаба. */
+  var onViewChange: () => Unit = () => ()
+
   setBackground(Palette.Background)
   setPreferredSize(Dimension(960, 660))
 
-  addMouseListener(new MouseAdapter:
+  private val mouse = new MouseAdapter:
+    private var last = (0, 0)
+    private var dragged = false
+
+    override def mousePressed(e: MouseEvent): Unit =
+      last = (e.getX, e.getY)
+      dragged = false
+
+    override def mouseDragged(e: MouseEvent): Unit =
+      val (dx, dy) = (e.getX - last._1, e.getY - last._2)
+      if dragged || math.abs(dx) + math.abs(dy) > 3 then
+        dragged = true
+        setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR))
+        viewport.panBy(dx, dy)
+        last = (e.getX, e.getY)
+        viewChanged()
+
+    override def mouseReleased(e: MouseEvent): Unit =
+      setCursor(Cursor.getDefaultCursor)
+
     override def mouseClicked(e: MouseEvent): Unit =
-      val picked = organismAt(e.getX, e.getY)
-      selectedId = picked.map(_.id)
-      onSelect(picked)
-      if picked.isEmpty then sectorAt(e.getX, e.getY).foreach(onSectorClick)
-      repaint()
-  )
+      if !dragged then
+        val (x, y) = viewport.toView(e.getX, e.getY)
+        val picked = organismAt(x, y)
+        selectedId = picked.map(_.id)
+        onSelect(picked)
+        if picked.isEmpty then sectorAt(x, y).foreach(onSectorClick)
+        repaint()
+
+    override def mouseWheelMoved(e: MouseWheelEvent): Unit =
+      viewport.zoomAt(math.pow(1.15, -e.getPreciseWheelRotation), e.getX, e.getY)
+      viewChanged()
+
+  addMouseListener(mouse)
+  addMouseMotionListener(mouse)
+  addMouseWheelListener(mouse)
+
+  /** Приближает (factor > 1) или отдаляет карту вокруг центра окна. */
+  def zoomBy(factor: Double): Unit =
+    viewport.zoomAt(factor, getWidth / 2.0, getHeight / 2.0)
+    viewChanged()
+
+  /** Вписывает весь мир в окно. */
+  def fitView(): Unit =
+    viewport.reset()
+    viewChanged()
+
+  private def viewChanged(): Unit =
+    onViewChange()
+    repaint()
 
   /** Показывает новое состояние мира и дописывает текущие позиции в следы.
     * У корма следов нет: он ползёт по прямой, а таких организмов в мире больше всего — их следы дорого рисовать.
@@ -116,20 +164,20 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     val totalH = cell * cfg.rows + gap * (cfg.rows - 1)
     Layout(cell, gap, (getWidth - totalW) / 2, (getHeight - totalH) / 2)
 
-  /** Сектор под точкой экрана, если она попала в сектор, а не в промежуток между ними. */
-  private def sectorAt(x: Int, y: Int): Option[SectorId] =
+  /** Сектор под точкой вписанного вида, если она попала в сектор, а не в промежуток между ними. */
+  private def sectorAt(x: Double, y: Double): Option[SectorId] =
     val l = currentLayout
-    world.config.sectors.find(s => l.sectorRect(s).contains(x.toDouble, y.toDouble))
+    world.config.sectors.find(s => l.sectorRect(s).contains(x, y))
 
-  /** Ближайший к точке экрана организм, по которому попал клик (с запасом в несколько пикселей). */
-  private def organismAt(x: Int, y: Int): Option[Organism] =
+  /** Ближайший к точке вписанного вида организм, по которому попал клик (с запасом в 8 экранных пикселей). */
+  private def organismAt(x: Double, y: Double): Option[Organism] =
     val l = currentLayout
     world.organisms
       .map { o =>
         val (sx, sy) = l.toScreen(o.sector, o.pos)
         o -> (math.hypot(sx - x, sy - y) - screenRadius(l, o))
       }
-      .filter(_._2 < 8)
+      .filter(_._2 < 8 / viewport.zoom)
       .minByOption(_._2)
       .map(_._1)
 
@@ -137,6 +185,8 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     super.paintComponent(g0)
     val g = g0.asInstanceOf[Graphics2D]
     g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+    // Всё ниже рисуется во «вписанном» виде, а масштаб и сдвиг применяются одним преобразованием.
+    g.transform(viewport.transform)
     val l = currentLayout
     world.config.sectors.foreach(drawSector(g, l, _))
     world.corpses.foreach(drawCarrion(g, l, _))

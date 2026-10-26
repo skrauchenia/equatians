@@ -33,7 +33,7 @@ object Genesis:
     }
     val forage = for
       sector <- world.sectors.toVector
-      _ <- 0 until rules.forage.initialPerSector
+      _ <- 0 until rules.forage.initialPerSector(world.sectorSize)
     yield sector
     val forageOrganisms = forage.zipWithIndex.map { (s, i) =>
       val pos = Vec2(rnd.nextDouble() * world.sectorSize, rnd.nextDouble() * world.sectorSize)

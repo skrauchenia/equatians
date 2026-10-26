@@ -8,7 +8,8 @@ import scala.util.Random
 /** Корм — организмы с функцией движения-константой, возобновляемая еда мира.
   *
   * Корм появляется двумя путями: изредка сам по себе (чтобы опустевший сектор ожил) и почкованием —
-  * каждый корм с вероятностью reproduction-rate · (1 − n / max-per-sector) за тик отпочковывает клона.
+  * каждый корм с вероятностью reproduction-rate · (1 − n / N) за тик отпочковывает клона, где N — предел сектора,
+  * пропорциональный его площади (`forage.concentration`).
   * У корма есть «спящие» гены — период, span, функция урона: пока функция движения константа, они не работают,
   * но наследуются и мутируют, и пригодятся, если клон пробудится в активный организм.
   */
@@ -50,7 +51,7 @@ object Forage:
     val size = world.config.sectorSize
     val counts = organisms.filter(_.forage).groupMapReduce(_.sector)(_ => 1)(_ + _)
     val sprouts = world.config.sectors.zipWithIndex.filter { (sector, i) =>
-      counts.getOrElse(sector, 0) < f.maxPerSector && Rng.uniform(world.seed, world.tick, -(i + 1), 7) < f.spawnRate
+      counts.getOrElse(sector, 0) < f.maxPerSector(size) && Rng.uniform(world.seed, world.tick, -(i + 1), 7) < f.spawnRate
     }
     sprouts.zipWithIndex.map { case ((sector, i), k) =>
       val rnd = Random(Rng.long(world.seed, world.tick, -(i + 1), 8))
@@ -58,7 +59,7 @@ object Forage:
       random(firstId + k, sector, pos, world.rules, world.genesis, rnd, world.tick)
     }.toVector
 
-  /** Почкование: каждый живой корм с вероятностью reproduction-rate · (1 − n / max-per-sector)
+  /** Почкование: каждый живой корм с вероятностью reproduction-rate · (1 − n / N), N — предел сектора,
     * отпочковывает клона в паре единиц от себя. n пересчитывается по ходу, так что предел не превышается.
     *
     * @return организмы (у родителей — запись в журнале) и отпочковавшиеся клоны с id начиная с `firstId`
@@ -69,7 +70,8 @@ object Forage:
     val start = (organisms.filter(_.forage).groupMapReduce(_.sector)(_ => 1)(_ + _), Vector.empty[Genetics.Offspring])
     val (_, buds) = organisms.filter(_.forage).foldLeft(start) { case ((counts, acc), p) =>
       val n = counts.getOrElse(p.sector, 0)
-      val chance = f.reproductionRate * (1 - n.toDouble / f.maxPerSector)
+      val cap = f.maxPerSector(size)
+      val chance = if cap == 0 then 0.0 else f.reproductionRate * (1 - n.toDouble / cap)
       if Rng.uniform(world.seed, world.tick, p.id, 12) >= chance then (counts, acc)
       else
         val rnd = Random(Rng.long(world.seed, world.tick, p.id, 13))

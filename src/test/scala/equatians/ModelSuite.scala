@@ -4,7 +4,7 @@ import equatians.model.*
 import equatians.model.MathFunction.*
 import equatians.sim.{Forage, Genealogy, Genesis, Genetics, Simulation}
 import equatians.stats.*
-import equatians.ui.Navigation
+import equatians.ui.{Navigation, Viewport}
 
 import scala.util.Random
 
@@ -178,7 +178,7 @@ class ModelSuite extends munit.FunSuite:
 
   test("genesis spawns organisms with full health and satiety"):
     val w = Genesis.randomWorld(WorldConfig(3, 2, 100), rules, cfg.genesis, count = 50, seed = 3)
-    assertEquals(w.organisms.count(_.forage), 6 * cfg.rules.forage.initialPerSector)
+    assertEquals(w.organisms.count(_.forage), 6 * cfg.rules.forage.initialPerSector(100))
     w.organisms.filterNot(_.forage).foreach { o =>
       assertEqualsDouble(o.health, o.maxHealth, 1e-9)
       assertEqualsDouble(o.satiety, rules.energy.maxSatiety, 1e-9)
@@ -248,7 +248,7 @@ class ModelSuite extends munit.FunSuite:
     )
 
   test("forage sprouts in every sector over time, up to the limit"):
-    val withForage = cfg.rules.copy(forage = cfg.rules.forage.copy(spawnRate = 1, reproductionRate = 0, maxPerSector = 5))
+    val withForage = cfg.rules.copy(forage = cfg.rules.forage.copy(spawnRate = 1, reproductionRate = 0, concentration = 5))
     val w = World(WorldConfig(2, 1, 100), withForage, cfg.genesis, Vector.empty, seed = 1)
     val end = run(w, 50)
     assert(end.organisms.forall(_.forage))
@@ -257,7 +257,7 @@ class ModelSuite extends munit.FunSuite:
     assertEquals(end.forageSpawned, 10L)
 
   test("forage buds clones until its sector is full"):
-    val budding = rules.copy(forage = rules.forage.copy(reproductionRate = 1, awakeningRate = 0, maxPerSector = 5))
+    val budding = rules.copy(forage = rules.forage.copy(reproductionRate = 1, awakeningRate = 0, concentration = 5))
     val end = run(world(forageAt(0, Vec2(50, 50), r = budding)).copy(rules = budding), 200)
     assertEquals(end.organisms.size, 5)
     assert(end.organisms.forall(_.forage))
@@ -273,7 +273,7 @@ class ModelSuite extends munit.FunSuite:
     assertEquals((k.organism.maxHealth, k.organism.generation, k.organism.parents), (p.maxHealth, 1, Vector(0)))
 
   test("awakened clone becomes an active organism of a new species"):
-    val awakening = rules.copy(forage = rules.forage.copy(reproductionRate = 1, awakeningRate = 1, maxPerSector = 10))
+    val awakening = rules.copy(forage = rules.forage.copy(reproductionRate = 1, awakeningRate = 1, concentration = 10))
     val end = Simulation.step(world(forageAt(0, Vec2(50, 50), heading = 1.2, r = awakening)).copy(rules = awakening))
     assertEquals(end.awakenings, 1L)
     val child = end.organisms.find(_.id != 0).get
@@ -282,6 +282,14 @@ class ModelSuite extends munit.FunSuite:
     assertEqualsDouble(child.satiety, rules.reproduction.offspringSatiety * rules.energy.maxSatiety, 1e-9)
     assert(child.log.head.text.startsWith("ПРОБУДИЛСЯ из корма #0"), child.log)
     assertEquals(child.movement.period, 40)
+
+  test("forage limit scales with sector area"):
+    val f = rules.forage.copy(concentration = 100, initialConcentration = 10)
+    assertEquals((f.maxPerSector(100), f.maxPerSector(200), f.maxPerSector(50)), (100, 400, 25))
+    assertEquals(f.initialPerSector(300), 90)
+    val grown = rules.copy(forage = rules.forage.copy(reproductionRate = 1, awakeningRate = 0, concentration = 5))
+    val big = World(WorldConfig(1, 1, 200), grown, cfg.genesis, Vector(forageAt(0, Vec2(100, 100), r = grown)), seed = 1)
+    assertEquals(run(big, 300).organisms.size, 20)
 
   test("forage is passive: crawls straight, never hungers, decides or heals"):
     val f = forageAt(0, Vec2(50, 50), 0)
@@ -418,6 +426,23 @@ class ModelSuite extends munit.FunSuite:
     nav.go(7)
     assertEquals(nav.trail, (Vector(1, 2, 7), 2))
     assert(!nav.canForward && nav.canBack)
+
+  test("viewport zoom keeps the point under the cursor in place and maps clicks back"):
+    val v = Viewport()
+    v.zoomAt(2, 100, 50)
+    assertEquals(v.toView(100, 50), (100.0, 50.0))
+    assertEquals(v.toView(300, 250), (200.0, 150.0))
+    v.panBy(10, -20)
+    assertEquals(v.toView(110, 30), (100.0, 50.0))
+    v.zoomAt(1e6, 0, 0)
+    assertEquals(v.zoom, 40.0)
+    v.reset()
+    assertEquals((v.zoom, v.toView(5, 7)), (1.0, (5.0, 7.0)))
+
+  test("a single-sector world works"):
+    val w = Genesis.randomWorld(WorldConfig(1, 1, 60), rules, cfg.genesis, count = 20, seed = 2)
+    val end = run(w, 500)
+    assert(end.organisms.forall(o => o.sector == SectorId(0, 0) && o.pos.x <= 60 && o.pos.y <= 60))
 
   test("default config file loads"):
     assertEquals(cfg.genesis.movement.families.toSet, Family.values.toSet - Family.Constant)

@@ -28,6 +28,8 @@ final class SimulatorApp(config: AppConfig):
   private val rules = config.rules
 
   private var seed = config.population.seed
+  /** Геометрия мира: из конфига, но её можно поменять в панели — тогда создаётся новый мир. */
+  private var worldConfig = config.world
   private var world = createWorld()
   private var running = true
 
@@ -80,6 +82,7 @@ final class SimulatorApp(config: AppConfig):
   def start(): Unit =
     view.onSelect = _ => refreshInfo()
     view.onSectorClick = id => statsWindow.show(Scope.Sector(id))
+    view.onViewChange = () => zoomLabel.setText(s"${(view.viewport.zoom * 100).round}%")
     history.reset(world)
     frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE)
     frame.getContentPane.setLayout(BorderLayout())
@@ -95,7 +98,7 @@ final class SimulatorApp(config: AppConfig):
 
   /** Новый случайный мир по текущему сиду и параметрам из конфига. */
   private def createWorld(): World =
-    Genesis.randomWorld(config.world, rules, config.genesis, config.population.count, seed)
+    Genesis.randomWorld(worldConfig, rules, config.genesis, config.population.count, seed)
 
   /** Один кадр: прогнать сколько успеем тиков, перерисовать, раз в полсекунды обновить TPS. */
   private def onFrame(): Unit =
@@ -163,6 +166,69 @@ final class SimulatorApp(config: AppConfig):
         s"Корм: ${forage.size}, отпочковалось ${world.buds}, пробудилось ${world.awakenings}</html>"
     )
     refreshInfo()
+
+  private val colsSpinner = JSpinner(SpinnerNumberModel(config.world.cols, 1, 20, 1))
+  private val rowsSpinner = JSpinner(SpinnerNumberModel(config.world.rows, 1, 20, 1))
+  private val sizeSpinner = JSpinner(SpinnerNumberModel(config.world.sectorSize.round.toInt, 20, 1000, 10))
+  private val zoomLabel = JLabel("100%")
+
+  /** Две строки из `rows`, без растягивания по ширине панели (иначе BoxLayout раздувает их по высоте). */
+  private def stacked(rows: JComponent*): JComponent =
+    val box = JPanel()
+    box.setLayout(BoxLayout(box, BoxLayout.Y_AXIS))
+    rows.foreach { r =>
+      r.setAlignmentX(Component.LEFT_ALIGNMENT)
+      box.add(r)
+    }
+    box.setMaximumSize(box.getPreferredSize)
+    box
+
+  /** Строка из компонентов слева направо. */
+  private def line(cs: JComponent*): JPanel =
+    val row = JPanel(FlowLayout(FlowLayout.LEFT, 3, 1))
+    cs.foreach(row.add)
+    row
+
+  /** Сетка и размер сектора; «Применить» создаёт новый мир с этой геометрией.
+    * Две строки — в одну по ширине панели не помещается.
+    */
+  private def worldControls: JComponent =
+    val apply = JButton("Применить — новый мир")
+    apply.setToolTipText("Создать новый мир с такой сеткой секторов и размером сектора")
+    apply.setFocusable(false)
+    apply.addActionListener(_ => applyGeometry())
+    stacked(
+      line(JLabel("Сетка"), colsSpinner, JLabel("×"), rowsSpinner, JLabel(", сектор"), sizeSpinner),
+      line(apply)
+    )
+
+  /** Масштаб: −, +, вписать и текущее значение. Колесо мыши и перетаскивание работают на самой карте. */
+  private def zoomControls: JComponent =
+    def button(title: String, tip: String)(action: => Unit) =
+      val b = JButton(title)
+      b.setToolTipText(tip)
+      b.setFocusable(false)
+      b.addActionListener(_ => action)
+      b
+    val box = stacked(
+      line(JLabel("Масштаб:"), zoomLabel, JLabel("(колесо мыши, перетаскивание)")),
+      line(
+        button("−", "Отдалить")(view.zoomBy(1 / 1.25)),
+        button("+", "Приблизить")(view.zoomBy(1.25)),
+        button("Вписать (F)", "Показать весь мир")(view.fitView())
+      )
+    )
+    box
+
+  /** Создаёт новый мир с геометрией из панели и вписывает его в окно. */
+  private def applyGeometry(): Unit =
+    worldConfig = WorldConfig(
+      cols = colsSpinner.getValue.asInstanceOf[Int],
+      rows = rowsSpinner.getValue.asInstanceOf[Int],
+      sectorSize = sizeSpinner.getValue.asInstanceOf[Int].toDouble
+    )
+    view.fitView()
+    newWorld()
 
   /** Открывает родословную выбранного организма. */
   private def openLineage(): Unit = view.selected.foreach(o => lineageWindow.show(o.id))
@@ -278,7 +344,9 @@ final class SimulatorApp(config: AppConfig):
     statsButton.setToolTipText("Клик по пустому месту сектора — статистика сектора")
     add(statsButton)
     trailsBox.addActionListener(_ => view.showTrails = trailsBox.isSelected)
-    add(trailsBox, 10)
+    add(trailsBox, 6)
+    add(worldControls, 4)
+    add(zoomControls, 10)
 
     add(JLabel("Виды (функция движения):"))
     val legend = JPanel(GridLayout(0, 2, 6, 2))
@@ -328,6 +396,7 @@ final class SimulatorApp(config: AppConfig):
     bind(KeyEvent.VK_T, "trails")(toggleTrails())
     bind(KeyEvent.VK_S, "stats")(statsWindow.show(Scope.Whole))
     bind(KeyEvent.VK_L, "lineage")(openLineage())
+    bind(KeyEvent.VK_F, "fit")(view.fitView())
     bind(KeyEvent.VK_EQUALS, "faster")(changeSpeed(1))
     bind(KeyEvent.VK_PLUS, "faster2")(changeSpeed(1))
     bind(KeyEvent.VK_MINUS, "slower")(changeSpeed(-1))
