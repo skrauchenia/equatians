@@ -19,8 +19,8 @@ object Main:
 /** Окно симулятора: мир слева, панель управления и карточка организма справа.
   *
   * Скорость задаётся в тиках за кадр. Кадр ~60 раз в секунду, но на симуляцию в кадре
-  * отводится не больше `ui.frame-budget-ms` — если не успеваем, реальная скорость (TPS)
-  * будет ниже заданной.
+  * отводится не больше `ui.frame-budget-ms` (или времени отрисовки прошлого кадра, если оно больше) —
+  * если не успеваем, реальная скорость (TPS) будет ниже заданной.
   */
 final class SimulatorApp(config: AppConfig):
   private val SpeedSteps = config.ui.speedSteps
@@ -103,7 +103,9 @@ final class SimulatorApp(config: AppConfig):
   /** Один кадр: прогнать сколько успеем тиков, перерисовать, раз в полсекунды обновить TPS. */
   private def onFrame(): Unit =
     if running then
-      val deadline = System.nanoTime() + FrameBudgetNanos
+      // Если кадр рисуется дольше бюджета, симуляции даётся столько же, сколько отрисовке:
+      // иначе на большой скорости почти всё время уходило бы на картинку, а не на тики.
+      val deadline = System.nanoTime() + FrameBudgetNanos.max(view.lastPaintNanos)
       var done = 0
       while done < ticksPerFrame && System.nanoTime() < deadline do
         world = Simulation.step(world)

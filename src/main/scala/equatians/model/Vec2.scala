@@ -11,8 +11,8 @@ final case class Vec2(x: Double, y: Double):
   /** Умножение на скаляр. */
   def *(k: Double): Vec2 = Vec2(x * k, y * k)
 
-  /** Евклидова длина. */
-  def length: Double = math.hypot(x, y)
+  /** Евклидова длина. Через `sqrt`, а не `math.hypot`: тот в разы медленнее, а переполнение здесь невозможно. */
+  def length: Double = math.sqrt(x * x + y * y)
 
 object Vec2:
   val Zero: Vec2 = Vec2(0, 0)

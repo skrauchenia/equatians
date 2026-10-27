@@ -2,7 +2,7 @@ package equatians
 
 import equatians.model.*
 import equatians.model.MathFunction.*
-import equatians.sim.{Forage, Genealogy, Genesis, Genetics, Simulation}
+import equatians.sim.{Forage, Genealogy, Genesis, Genetics, Simulation, SpatialIndex}
 import equatians.stats.*
 import equatians.ui.{Navigation, Viewport}
 
@@ -511,6 +511,19 @@ class ModelSuite extends munit.FunSuite:
       assert(child.aggression >= 0 && child.aggression <= 1, child.aggression)
     val quiet = Genetics.offspring(100, a, b, Vec2(50, 50), 0, world(a, b).copy(rules = noMutation), Random(1)).organism
     assert(Set(0.2, 0.9)(quiet.aggression))
+
+  test("spatial index finds the same nearest as a full scan, earliest on ties"):
+    val rnd = Random(7)
+    // Точки на сетке с шагом 5 — много равных расстояний, чтобы проверить выбор среди равноудалённых.
+    val points = Vector.fill(400)(Vec2((rnd.nextInt(41) * 5).toDouble, (rnd.nextInt(41) * 5).toDouble))
+    val index = SpatialIndex(points.zipWithIndex, _._1, 25)
+    for _ <- 0 until 300 do
+      val p = Vec2(rnd.nextDouble() * 200, rnd.nextDouble() * 200)
+      val radius = rnd.nextDouble() * 25
+      val accept = (x: (Vec2, Int)) => x._2 % 3 != 0
+      val scan = points.zipWithIndex.iterator.filter(accept)
+        .map(x => x -> (x._1 - p).length).filter(_._2 <= radius).minByOption(_._2)
+      assertEquals(index.nearest(p, radius, accept).map(_._1), scan.map(_._1))
 
   test("default config file loads"):
     assertEquals(cfg.genesis.movement.families.toSet, Family.values.toSet - Family.Constant)

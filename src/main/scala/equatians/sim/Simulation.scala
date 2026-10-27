@@ -35,10 +35,14 @@ object Simulation:
     val now: Long = world.tick
     val rules: Rules = world.rules
     val byId: Map[Int, Organism] = world.organisms.iterator.map(o => o.id -> o).toMap
-    val bySector: Map[SectorId, Vector[Organism]] = world.organisms.groupBy(_.sector)
     val corpseById: Map[Int, Corpse] = world.corpses.iterator.map(c => c.id -> c).toMap
     val corpsesBySector: Map[SectorId, Vector[Corpse]] = world.corpses.groupBy(_.sector)
-    val forageBySector: Map[SectorId, Vector[Organism]] = world.organisms.filter(_.forage).groupBy(_.sector)
+    // Индексы для поиска ближайших в радиусе восприятия: без них каждый организм перебирал бы весь сектор.
+    private def indexed[A](bySector: Map[SectorId, Vector[A]], pos: A => Vec2) =
+      bySector.view.mapValues(SpatialIndex(_, pos, rules.perceptionRadius)).toMap
+    val activeIndex: Map[SectorId, SpatialIndex[Organism]] = indexed(world.organisms.filterNot(_.forage).groupBy(_.sector), _.pos)
+    val forageIndex: Map[SectorId, SpatialIndex[Organism]] = indexed(world.organisms.filter(_.forage).groupBy(_.sector), _.pos)
+    val corpseIndex: Map[SectorId, SpatialIndex[Corpse]] = indexed(corpsesBySector, _.pos)
 
     /** Является ли организм `id` кормом. */
     def isForage(id: Int): Boolean = byId.get(id).exists(_.forage)
@@ -142,32 +146,15 @@ object Simulation:
 
   /** Ближайший организм другого вида в своём секторе в радиусе восприятия. */
   private def nearestStranger(o: Organism, ctx: Context): Option[(Organism, Double)] =
-    ctx.bySector
-      .getOrElse(o.sector, Vector.empty)
-      .iterator
-      .filter(n => n.id != o.id && !n.forage && n.species != o.species)
-      .map(n => n -> o.distanceTo(n))
-      .filter(_._2 <= ctx.rules.perceptionRadius)
-      .minByOption(_._2)
+    nearest(o, ctx.activeIndex, ctx, n => n.id != o.id && n.species != o.species)
 
   /** Ближайший готовый к размножению организм своего вида в своём секторе в радиусе восприятия. */
   private def nearestMate(o: Organism, ctx: Context): Option[(Organism, Double)] =
-    ctx.bySector
-      .getOrElse(o.sector, Vector.empty)
-      .iterator
-      .filter(n => n.id != o.id && !n.forage && n.species == o.species && n.readyToMate(ctx.now, ctx.rules))
-      .map(n => n -> o.distanceTo(n))
-      .filter(_._2 <= ctx.rules.perceptionRadius)
-      .minByOption(_._2)
+    nearest(o, ctx.activeIndex, ctx, n => n.id != o.id && n.species == o.species && n.readyToMate(ctx.now, ctx.rules))
 
-  /** Ближайший к организму объект (труп или корм) своего сектора в радиусе восприятия. */
-  private def nearest[A](o: Organism, bySector: Map[SectorId, Vector[A]], pos: A => Vec2, ctx: Context): Option[(A, Double)] =
-    bySector
-      .getOrElse(o.sector, Vector.empty)
-      .iterator
-      .map(c => c -> (pos(c) - o.pos).length)
-      .filter(_._2 <= ctx.rules.perceptionRadius)
-      .minByOption(_._2)
+  /** Ближайший к организму объект своего сектора из индекса `index` в радиусе восприятия. */
+  private def nearest[A](o: Organism, index: Map[SectorId, SpatialIndex[A]], ctx: Context, accept: A => Boolean = (_: A) => true): Option[(A, Double)] =
+    index.get(o.sector).flatMap(_.nearest(o.pos, ctx.rules.perceptionRadius, accept))
 
   /** Фаза 1: проверить, существуют ли ещё цель/угроза/падаль/партнёр; каждый тик — не появилась ли падаль;
     * раз в `decision-interval` тиков — поискать пару, а если не вышло, бросить кубик относительно чужака.
@@ -207,11 +194,11 @@ object Simulation:
     val distractible = !fighting || ctx.roll(kept, 8) >= kept.aggression
     val carrion = kept.behaviour match
       case Cruise | Chase(_) if distractible && sat < r.scavenging.satietyThreshold =>
-        nearest(kept, ctx.corpsesBySector, _.pos, ctx).filter(_ => ctx.roll(kept, 3) < r.scavenging.probability)
+        nearest(kept, ctx.corpseIndex, ctx).filter(_ => ctx.roll(kept, 3) < r.scavenging.probability)
       case _ => None
     val forage = kept.behaviour match
       case Cruise | Chase(_) if distractible && carrion.isEmpty && !huntingForage && sat < r.forage.satietyThreshold =>
-        nearest(kept, ctx.forageBySector, _.pos, ctx).filter(_ => ctx.roll(kept, 6) < r.forage.probability)
+        nearest(kept, ctx.forageIndex, ctx).filter(_ => ctx.roll(kept, 6) < r.forage.probability)
       case _ => None
 
     (brawl, carrion, forage) match

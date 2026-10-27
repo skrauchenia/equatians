@@ -5,6 +5,7 @@ import equatians.model.*
 import java.awt.*
 import java.awt.event.{MouseAdapter, MouseEvent, MouseWheelEvent}
 import java.awt.geom.{Ellipse2D, Line2D, Path2D, Rectangle2D}
+import java.awt.image.BufferedImage
 import javax.swing.JPanel
 import scala.collection.mutable
 
@@ -36,8 +37,17 @@ object Palette:
 /** Рисует сектора мира и организмы в них. Следы хранятся только здесь, в модели их нет. */
 final class WorldView(initial: World, trailLength: Int) extends JPanel:
   private var world: World = initial
-  /** Следы: позиции вместе с сектором — после перехода через проход след рвётся, а не тянется через карту. */
-  private val trails = mutable.Map.empty[Int, mutable.ArrayDeque[(SectorId, Vec2)]]
+  /** Организмы и трупы текущего мира по id — для линий намерения, чтобы не искать перебором. */
+  private var byId: Map[Int, Organism] = initial.organisms.iterator.map(o => o.id -> o).toMap
+  private var corpseById: Map[Int, Corpse] = initial.corpses.iterator.map(c => c.id -> c).toMap
+  /** Точка следа. Сектор хранится, чтобы после перехода через проход след рвался, а не тянулся через карту. */
+  private final case class TrailPoint(tick: Long, sector: SectorId, pos: Vec2)
+
+  /** Следы: точка на каждый показанный кадр, но не старше `trailLength` тиков. Длина в тиках, а не в кадрах,
+    * чтобы на ускорении следы не вытягивались через весь сектор: сглаженная линия стоит пропорционально
+    * своей длине в пикселях, и сотни таких следов съедали большую часть кадра.
+    */
+  private val trails = mutable.Map.empty[Int, mutable.ArrayDeque[TrailPoint]]
 
   /** Рисовать ли следы организмов. */
   var showTrails: Boolean = true
@@ -119,12 +129,14 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
     */
   def show(w: World): Unit =
     world = w
+    byId = w.organisms.iterator.map(o => o.id -> o).toMap
+    corpseById = w.corpses.iterator.map(c => c.id -> c).toMap
     val alive = w.organisms.iterator.map(_.id).toSet
     trails.filterInPlace((id, _) => alive(id))
     for o <- w.organisms if !o.forage do
       val trail = trails.getOrElseUpdate(o.id, mutable.ArrayDeque.empty)
-      trail.append(o.sector -> o.pos)
-      if trail.size > trailLength then trail.removeHead()
+      trail.append(TrailPoint(w.tick, o.sector, o.pos))
+      while trail.head.tick < w.tick - trailLength do trail.removeHead()
     repaint()
 
   /** Показывает другой мир с нуля: стирает следы и снимает выделение. */
@@ -182,9 +194,35 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
       .minByOption(_._2)
       .map(_._1)
 
+  /** Сколько наносекунд рисовался последний кадр. */
+  def lastPaintNanos: Long = lastPaint
+  private var lastPaint = 0L
+
+  /** Кадр в памяти: сглаженные фигуры в него рисуются в разы быстрее, чем прямо на экран
+    * (на macOS каждая такая фигура уходит в видеоконвейер отдельно). На экран кадр выводится одной картинкой.
+    */
+  private var buffer: Option[BufferedImage] = None
+
   override def paintComponent(g0: Graphics): Unit =
-    super.paintComponent(g0)
+    val start = System.nanoTime()
     val g = g0.asInstanceOf[Graphics2D]
+    // Масштаб экрана (2 на Retina): буфер — в физических пикселях, чтобы картинка не мылилась.
+    val scale = g.getTransform.getScaleX.max(1)
+    val (w, h) = ((getWidth * scale).ceil.toInt.max(1), (getHeight * scale).ceil.toInt.max(1))
+    val img = buffer.filter(b => b.getWidth == w && b.getHeight == h).getOrElse(BufferedImage(w, h, BufferedImage.TYPE_INT_RGB))
+    buffer = Some(img)
+    val bg = img.createGraphics()
+    try
+      bg.scale(scale, scale)
+      render(bg)
+    finally bg.dispose()
+    g.drawImage(img, 0, 0, getWidth, getHeight, null)
+    lastPaint = System.nanoTime() - start
+
+  /** Рисует всю карту в `g` (в логических пикселях панели). */
+  private def render(g: Graphics2D): Unit =
+    g.setColor(getBackground)
+    g.fillRect(0, 0, getWidth, getHeight)
     g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
     // Всё ниже рисуется во «вписанном» виде, а масштаб и сдвиг применяются одним преобразованием.
     g.transform(viewport.transform)
@@ -251,15 +289,24 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
       g.draw(Line2D.Double(rect.getMinX, rect.getMinY, rect.getMinX, rect.getMaxY))
       g.draw(Line2D.Double(rect.getMaxX, rect.getMinY, rect.getMaxX, rect.getMaxY))
 
-  /** След организма — ломаная по его последним позициям; у выбранного ярче. */
+  /** След организма — ломаная по его позициям за последние `trailLength` тиков; у выбранного ярче. */
   private def drawTrail(g: Graphics2D, l: Layout, o: Organism): Unit =
     trails.get(o.id).filter(_.size > 1).foreach { trail =>
+      // Точки ближе пары экранных пикселей к предыдущей нарисованной пропускаются (кроме последней):
+      // на глаз ломаная та же, а отрезков в разы меньше.
+      val minStep = 2 / viewport.zoom
       val path = Path2D.Double()
       var previous: Option[SectorId] = None
-      trail.foreach { (sector, p) =>
-        val (x, y) = l.toScreen(sector, p)
-        if previous.contains(sector) then path.lineTo(x, y) else path.moveTo(x, y)
-        previous = Some(sector)
+      var (lx, ly) = (0.0, 0.0)
+      trail.indices.foreach { i =>
+        val p = trail(i)
+        val (x, y) = l.toScreen(p.sector, p.pos)
+        val far = math.abs(x - lx) + math.abs(y - ly) >= minStep
+        if !previous.contains(p.sector) || far || i == trail.size - 1 then
+          if previous.contains(p.sector) then path.lineTo(x, y) else path.moveTo(x, y)
+          lx = x
+          ly = y
+        previous = Some(p.sector)
       }
       val c = Palette.byFamily(o.family)
       val alpha = if selectedId.contains(o.id) then 200 else 70
@@ -282,7 +329,7 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
       g.setStroke(stroke)
       g.draw(Line2D.Double(x, y, tx, ty))
     def lineTo(id: Int, color: Color, stroke: BasicStroke): Unit =
-      world.organisms.find(_.id == id).foreach(other => lineToPoint(other.sector, other.pos, color, stroke))
+      byId.get(id).foreach(other => lineToPoint(other.sector, other.pos, color, stroke))
     o.behaviour match
       case Behaviour.Chase(t) =>
         val justHit = world.tick - o.lastAttackTick <= 3
@@ -294,7 +341,7 @@ final class WorldView(initial: World, trailLength: Int) extends JPanel:
         val c = Palette.Flee
         lineTo(f, Color(c.getRed, c.getGreen, c.getBlue, 140), dash)
       case Behaviour.Scavenge(c) =>
-        world.corpses.find(_.id == c).foreach(corpse => lineToPoint(corpse.sector, corpse.pos, Palette.Scavenge, BasicStroke(1.5f)))
+        corpseById.get(c).foreach(corpse => lineToPoint(corpse.sector, corpse.pos, Palette.Scavenge, BasicStroke(1.5f)))
       case Behaviour.Mate(p) =>
         lineTo(p, Palette.Mate, BasicStroke(1.5f))
       case Behaviour.Cruise => ()
