@@ -226,13 +226,24 @@ final class SimulatorApp(config: AppConfig):
   /** Создаёт новый мир с геометрией из панели и вписывает его в окно. */
   private def applyGeometry(): Unit =
     worldConfig = WorldConfig(
-      cols = colsSpinner.getValue.asInstanceOf[Int],
-      rows = rowsSpinner.getValue.asInstanceOf[Int],
-      sectorSize = sizeSpinner.getValue.asInstanceOf[Int].toDouble,
-      passage = passageSpinner.getValue.asInstanceOf[Int] / 100.0
+      cols = committed(colsSpinner),
+      rows = committed(rowsSpinner),
+      sectorSize = committed(sizeSpinner).toDouble,
+      passage = committed(passageSpinner) / 100.0
     )
     view.fitView()
     newWorld()
+
+  /** Значение спиннера с учётом текста, набранного в поле, но ещё не принятого.
+    *
+    * `JSpinner` принимает набранное только по Enter или при потере фокуса, а кнопка «Применить» фокус
+    * не забирает, так что без `commitEdit` применялось бы прежнее значение. Неразборчивый текст
+    * отбрасывается, и в поле возвращается последнее принятое значение.
+    */
+  private def committed(s: JSpinner): Int =
+    try s.commitEdit()
+    catch case _: java.text.ParseException => s.getEditor.asInstanceOf[JSpinner.DefaultEditor].getTextField.setValue(s.getValue)
+    s.getValue.asInstanceOf[Int]
 
   /** Открывает родословную выбранного организма. */
   private def openLineage(): Unit = view.selected.foreach(o => lineageWindow.show(o.id))
